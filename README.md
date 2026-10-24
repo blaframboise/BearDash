@@ -1,6 +1,6 @@
 # BearDash 🐻
 
-Your cards. Bear delivered. An installable web app for the playgroup’s Monday and Friday pickup runs from Gamers’ Gauntlet to Eternal Games in Warren, Michigan.
+Your cards. Bear delivered. An installable web app for the playgroup’s Monday and Friday pickup runs from Gamer’s Gauntlet to Eternal Games in Warren, Michigan.
 
 ## Current version: local interactive prototype
 
