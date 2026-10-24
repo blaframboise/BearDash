@@ -20,7 +20,7 @@ Open the local server in a browser. Submit a request, switch to Bear’s dashboa
 
 After reviewing and committing these files, push to GitHub. In repository Settings → Pages, choose Deploy from a branch, select the branch containing these files and /(root), and save. Relative paths support the `/BearDash/` project path. Pages is public hosting: do not commit private order information or credentials.
 
-On iPhone, open the published HTTPS site in Safari and use Share → Add to Home Screen. On Android, use the browser’s Install app or Add to Home screen option. Browser installation support varies; a home-screen bookmark remains available. The SVG icon is included; PNG icons should be added for broader installation and Apple icon support.
+On iPhone, open the published HTTPS site in Safari and use Share → Add to Home Screen. On Android, use the browser’s Install app or Add to Home screen option. Browser installation support varies; a home-screen bookmark remains available. The uploaded PNG app icon is registered in the manifest and as the Apple home-screen icon. Original branding assets are included at the repository root.
 
 ## Make it work across the group’s phones
 

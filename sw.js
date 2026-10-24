@@ -1,5 +1,5 @@
-const CACHE = 'beardash-shell-v2';
-const FILES = ['./','./index.html','./style.css','./app.js','./manifest.webmanifest','./icons/bear.svg'];
+const CACHE = 'beardash-shell-v3';
+const FILES = ['./','./index.html','./style.css','./app.js','./manifest.webmanifest','./beardash-wordmark.png','./beardash-icon.png','./beardash-hero.png','./beardash-mascot.png'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES))); });
 self.addEventListener('activate', event => { event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('beardash-shell-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', event => {

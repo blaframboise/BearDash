@@ -1,1 +1,19 @@
-{"id":"./","name":"BearDash","short_name":"BearDash","description":"Your cards. Bear delivered.","start_url":"./","scope":"./","display":"standalone","background_color":"#090d14","theme_color":"#090d14","icons":[{"src":"icons/bear.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}
+{
+  "id": "./",
+  "name": "BearDash",
+  "short_name": "BearDash",
+  "description": "Your cards. Bear delivered.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#090d14",
+  "theme_color": "#090d14",
+  "icons": [
+    {
+      "src": "beardash-icon.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
