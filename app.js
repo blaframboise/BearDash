@@ -24,6 +24,42 @@ async function readyToken() {
 }
 async function database(path, options) { return api('/rest/v1/'+path,options,await readyToken()); }
 const $ = selector => document.querySelector(selector);
+// Keep each task on its own screen; account controls live in the header menu.
+const menuButton = document.createElement('button');
+menuButton.id = 'account-menu-button'; menuButton.type = 'button';
+menuButton.textContent = '☰'; menuButton.setAttribute('aria-label','Open account menu');
+menuButton.setAttribute('aria-haspopup','dialog');menuButton.setAttribute('aria-expanded','false');
+$('header').append(menuButton);
+const accountMenu = document.createElement('dialog');accountMenu.id='account-menu';accountMenu.setAttribute('aria-labelledby','account-menu-title');
+const closeMenu=document.createElement('button');closeMenu.textContent='Close ×';closeMenu.className='close-menu';closeMenu.type='button';
+accountMenu.append(closeMenu,$('.account'),$('#connection-status'),$('.settings'));
+accountMenu.querySelector('.account h2').id='account-menu-title';document.body.append(accountMenu);
+menuButton.addEventListener('click',()=>{accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');});
+closeMenu.addEventListener('click',()=>accountMenu.close());
+accountMenu.addEventListener('close',()=>menuButton.setAttribute('aria-expanded','false'));
+accountMenu.addEventListener('click',event=>{if(event.target===accountMenu){const r=accountMenu.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)accountMenu.close();}});
+const home=document.createElement('section');home.id='home';home.className='view';
+home.append($('.hero'),$('.route'),$('.how'));
+const ordering=document.createElement('section');ordering.className='panel order-guide';
+ordering.innerHTML='<p class="eyebrow">START AT THE STORE</p><h2>Order cards. Then request your run.</h2><ol><li>Visit Gamer’s Gauntlet and place your order directly with the store. Choose store pickup if offered.</li><li>Find your order number on the confirmation page or in the store’s confirmation email. Press and hold the number on your phone to copy it.</li><li>Return to BearDash, choose Request a Pickup, and paste the order number. Use the same name as your store order.</li></ol><div class="actions"><a href="https://www.gamersgauntlet.net/" target="_blank" rel="noopener noreferrer">Visit Gamer’s Gauntlet ↗</a><button type="button" data-view="request">Request a Pickup →</button></div><p class="muted">The store opens in a separate tab. BearDash does not place card orders or import order numbers automatically.</p>';
+home.insertBefore(ordering,home.querySelector('.how'));
+const requestScreen=document.createElement('section');requestScreen.id='request';requestScreen.className='view';requestScreen.hidden=true;
+requestScreen.append($('#request-form').closest('.panel'));
+const oldColumns=$('#member .columns');const pickupPanel=$('#member-list').parentElement;oldColumns.replaceWith(pickupPanel);
+$('#member').hidden=true;$('main').prepend(home);$('main').append(requestScreen);
+$('nav').innerHTML='<button class="active" data-view="home" aria-current="page">Main</button><button data-view="member">My Pickups</button><button data-view="request">Request a Pickup</button><button data-view="bear" hidden>Bear’s dashboard <span id="badge">0</span></button>';
+$('main').prepend($('nav'));
+let activeView='home', navigationRole;
+function showView(id, scroll=true) {
+ if(role==='bear') id='bear';
+ else if(id==='bear') id='home';
+ if(!['home','member','request','bear'].includes(id)) return;
+ activeView=id;
+ for(const view of document.querySelectorAll('main > .view')) view.hidden=view.id!==id;
+ for(const tab of document.querySelectorAll('nav [data-view]')) {tab.classList.toggle('active',tab.dataset.view===id);if(tab.dataset.view===id)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}
+ if(scroll) {window.scrollTo({top:0,behavior:'instant'});const title=$('#'+id+' h1, #'+id+' h2');if(title){title.setAttribute('tabindex','-1');title.focus({preventScroll:true});}}
+}
+for(const logo of document.querySelectorAll('.brand')) logo.addEventListener('click',event=>{event.preventDefault();showView(role==='bear'?'bear':'home');});
 function toast(message) { $('#toast').textContent = message; $('#toast').style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => { $('#toast').style.display = 'none'; }, 4500); }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
 function dateLabel(value) { return new Date(`${value}T12:00:00`).toLocaleDateString('en-US', {timeZone:'America/Detroit',weekday:'long',month:'short',day:'numeric'}); }
@@ -66,13 +102,14 @@ const fieldset = document.createElement('fieldset');
 while ($('#request-form').firstChild) fieldset.append($('#request-form').firstChild);
 $('#request-form').append(fieldset);
 function accountUI() {
- fieldset.disabled = !role || loading;
+ fieldset.disabled = !role || role === 'bear' || loading;
  $('#auth-form').hidden = !!user;
  $('#signout').hidden = !user;
  $('#refresh').hidden = !user;
  $('[data-view="bear"]').hidden = role !== 'bear';
  $('.settings').hidden = role !== 'bear';
- if (role !== 'bear') { $('#bear').hidden = true; $('#member').hidden = false; $('[data-view="member"]').classList.add('active'); $('[data-view="bear"]').classList.remove('active'); }
+ for(const tab of document.querySelectorAll('nav [data-view]')) tab.hidden = role === 'bear' ? tab.dataset.view !== 'bear' : tab.dataset.view === 'bear';
+ if(navigationRole !== role) {navigationRole=role;showView(role === 'bear' ? 'bear' : 'home',false);} else showView(activeView,false);
  $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'BearDash member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
 }
 async function sync(manual = false) {
@@ -114,7 +151,7 @@ async function login(create = false) {
   else { $('#account-status').textContent = 'Check your email for the confirmation link, then return here to sign in. If no email arrives, contact the organizer.'; toast('Check your email to confirm your account.'); }
  } catch(error) { toast(error.message); }
  finally { loading = false; buttons.forEach(b=>b.disabled=false); }
- if(session) await sync();
+ if(session) { await sync(); if(role && accountMenu.open) accountMenu.close(); }
 }
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
@@ -124,6 +161,8 @@ $('#signout').addEventListener('click',()=>{
  if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
 });
 $('#refresh').addEventListener('click',()=>sync(true));
+const pickupRefresh=document.createElement('button');pickupRefresh.type='button';pickupRefresh.textContent='Refresh';pickupRefresh.addEventListener('click',()=>sync(true));$('#member .section-title').append(pickupRefresh);
+
 $('#request-form').elements.name.addEventListener('change',async event=>{
  const name = event.target.value.trim();
  if (!user || !name || name.length > 80) return;
@@ -134,12 +173,12 @@ $('#request-form').elements.name.addEventListener('change',async event=>{
  } catch { toast('Your pickup name could not be remembered. You can still enter it for this request.'); }
 });
 $('#request-form').addEventListener('submit', async event => {
- event.preventDefault(); if(!role || loading) return;
+ event.preventDefault(); if(!role || role === 'bear' || loading) return;
  const form = event.currentTarget, data = new FormData(form);
  const name = data.get('name').trim(), order = data.get('order').trim(), date = data.get('date');
  if (!name || !order || !upcomingDates().includes(date)) return toast('Enter a name, order number, and upcoming game night.');
  fieldset.disabled = true;
- try { await database('pickup_requests',{method:'POST',body:JSON.stringify({user_id:user.id,name,order,date,notes:data.get('notes').trim()})});form.reset();toast('Request sent to Bear.');await sync(); }
+ try { await database('pickup_requests',{method:'POST',body:JSON.stringify({user_id:user.id,name,order,date,notes:data.get('notes').trim()})});form.reset();toast('Request sent to Bear.');await sync();showView('member'); }
  catch(error) { toast('Request could not be saved: '+error.message); }
  finally { accountUI(); }
 });
@@ -153,13 +192,9 @@ $('#settings-form').addEventListener('submit', async event => {
 });
 document.addEventListener('click', async event => {
  const button = event.target.closest('button'); if(!button) return;
- if(button.dataset.view) {
-  if(button.dataset.view === 'bear' && role !== 'bear') return;
-  for(const view of document.querySelectorAll('.view')) view.hidden = view.id !== button.dataset.view;
-  for(const tab of document.querySelectorAll('[data-view]')) tab.classList.toggle('active',tab===button);
- }
+ if(button.dataset.view) showView(button.dataset.view);
  if(button.dataset.action==='setup') {
-  if(role === 'bear') { $('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
+  if(role === 'bear') { accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');$('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
   else toast('Ask Bear to set his pickup name and contact details.');
  }
  const transitions = {accept:'accepted',decline:'declined',deliver:'delivered'};

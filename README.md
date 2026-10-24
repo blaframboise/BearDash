@@ -25,3 +25,7 @@ Run `node --check app.js`, `node --check sw.js`, and `git diff --check`. Live au
 ## GitHub Pages and installation
 
 GitHub Pages deploys master at https://blaframboise.github.io/BearDash/. No frontend build is required. Keep private order data out of GitHub. On iPhone use Safari → Share → Add to Home Screen; on Android use Install app or Add to Home screen. The supplied PNG icon is configured for the manifest and Apple home screen. Original wordmark, hero, mascot, and icon assets live at the repository root.
+
+## App screens
+
+Members have Main, My Pickups, and Request a Pickup screens. Main includes ordering instructions and the store homepage link. Account sign-in, sign-out, refresh, and Bear settings live in the header menu. Bear-role accounts open directly to the delivery dashboard, with member screens hidden. These interface distinctions supplement the existing database role policies. Store checkout and copying order numbers remain manual.
