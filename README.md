@@ -2,30 +2,26 @@
 
 Your cards. Bear delivered. An installable web app for the playgroup’s Monday and Friday pickup runs from Gamer’s Gauntlet to Eternal Games in Warren, Michigan.
 
-## Current version: local interactive prototype
+## Shared app setup
 
-Includes responsive member requests, Bear’s accept/decline/delivered board, upcoming Michigan game-night dates, configurable $5 Venmo links, prewritten pickup authorization emails, and an offline app shell. All requests and settings are stored **only in the current browser**. Both views are intentionally accessible for demonstration. This version does not send requests to Bear, authenticate users, send notifications, verify payments, or send emails automatically. Do not use it as the group’s live dispatch system yet.
+The frontend now uses Supabase email/password accounts, approved group membership, shared pickup requests, and Bear-only status/settings controls. **The database SQL and authentication settings must be applied before shared use works.** See [the setup guide](supabase/README.md) and [setup.sql](supabase/setup.sql).
 
-## Run locally
+The project URL and publishable key in app.js are intentionally public browser configuration. Database permissions must be enforced by RLS, never by hiding the key. No secret/service-role key belongs in this repository.
 
-No dependencies or build step. From this checkout:
+Members request pickups, Bear accepts/declines/marks delivery, and accepted requests unlock a $5 Venmo link and prewritten store authorization email. Users must review and send both; links do not verify payment or email delivery. Bear sets his recognized pickup name in Playgroup setup. Confirm the store permits third-party pickup.
+
+Requests refresh every 15 seconds while the page is open, or manually with Refresh pickups. No background notifications are configured. Old local-preview requests are not imported. Account sessions use sessionStorage; sign-out clears session and displayed records. Only static app assets are cached offline; shared requests require network access.
+
+## Local development
+
+No dependencies or build step. Use the existing checkout; a cloud task is already isolated and does not need an additional Git worktree.
 
 ```sh
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
-Open the local server in a browser. Submit a request, switch to Bear’s dashboard, accept it, and return to My pickups. Configure Bear’s public Venmo username, his pickup name, and the store’s confirmed pickup email under Playgroup setup. The payment and compose-email links then become available. The sender must confirm both actions. The store must agree to third-party collection; a prewritten email does not establish its policy.
+Run `node --check app.js`, `node --check sw.js`, and `git diff --check`. Live authentication requires the exact development return URL to be permitted in Supabase if testing signup confirmations. Browser checks with simulated API responses validate UI behavior only. Follow the setup guide's separate-account live checks to validate real database permissions.
 
-## GitHub Pages
+## GitHub Pages and installation
 
-After reviewing and committing these files, push to GitHub. In repository Settings → Pages, choose Deploy from a branch, select the branch containing these files and /(root), and save. Relative paths support the `/BearDash/` project path. Pages is public hosting: do not commit private order information or credentials.
-
-On iPhone, open the published HTTPS site in Safari and use Share → Add to Home Screen. On Android, use the browser’s Install app or Add to Home screen option. Browser installation support varies; a home-screen bookmark remains available. The uploaded PNG app icon is registered in the manifest and as the Apple home-screen icon. Original branding assets are included at the repository root.
-
-## Make it work across the group’s phones
-
-Recommended next step: keep the frontend on GitHub Pages and add Supabase authentication and a shared request database. Enforce row-level security so members can access only their own requests and only Bear’s server-assigned role can accept or decline. Never trust the current view switch as authorization. Add realtime subscriptions or notifications for accepted requests. Store the public group configuration centrally. Keep service-role credentials out of the browser and repository.
-
-After acceptance, each member opens Venmo to confirm $5 and their email client to review/send authorization. Reliable automatic email would require a backend email provider and verified sender setup; sending as each member would require their email-provider authorization. Automatic Venmo transfers are not implemented or assumed available. An atomic transaction spanning pickup acceptance, Venmo, and email is not supported by these links.
-
-Before live use: connect the backend, enforce and test access policies, validate shared updates with two accounts on separate devices, confirm the store’s authorization process and Bear’s contact details, and test mobile payment/email handoff.
+GitHub Pages deploys master at https://blaframboise.github.io/BearDash/. No frontend build is required. Keep private order data out of GitHub. On iPhone use Safari → Share → Add to Home Screen; on Android use Install app or Add to Home screen. The supplied PNG icon is configured for the manifest and Apple home screen. Original wordmark, hero, mascot, and icon assets live at the repository root.

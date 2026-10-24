@@ -1,15 +1,30 @@
 'use strict';
-const REQUESTS_KEY = 'beardash.requests.v1';
-const SETTINGS_KEY = 'beardash.settings.v1';
-function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
-let requests = read(REQUESTS_KEY, []);
-if (!Array.isArray(requests)) requests = [];
-const defaultSettings = {venmo:'Kris-Timchuck',email:'gamersgauntletmi@gmail.com',bearName:''};
-let settings = read(SETTINGS_KEY, defaultSettings);
-if (!settings || typeof settings !== 'object' || Array.isArray(settings)) settings = {};
+let requests = [];
+let settings = {venmo:'Kris-Timchuck',email:'gamersgauntletmi@gmail.com',bearName:''};
+let user = null, role = null, loading = false;
+const PROJECT = 'https://bvokijnmogjmftkggbxn.supabase.co';
+const PUBLIC_KEY = 'sb_publishable_h1qDQ4i4AQ2KhY3r7tMROA_3ttUMRqW';
+let session = null;
+try { session = JSON.parse(sessionStorage.getItem('beardash.auth')); } catch {}
+let authEpoch = 0, refreshPromise;
+function storeSession(value) { session = value; try { if(value) sessionStorage.setItem('beardash.auth',JSON.stringify(value)); else sessionStorage.removeItem('beardash.auth'); } catch {} }
+async function api(path, options = {}, token = session?.access_token) {
+ const response = await fetch(PROJECT + path, {...options,cache:'no-store',headers:{apikey:PUBLIC_KEY,...(token ? {Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json',...options.headers}});
+ const data = await response.json().catch(()=>null);
+ if (!response.ok) throw new Error(data?.msg || data?.error_description || data?.message || `Connection failed (${response.status})`);
+ return data;
+}
+async function readyToken() {
+ if (!session) throw new Error('Please sign in first.');
+ if (session.expires_at * 1000 < Date.now()+60000) {
+  if (!refreshPromise) { const epoch = authEpoch; refreshPromise = api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})},null).then(data=>{if(epoch !== authEpoch) throw new Error('Session changed. Please sign in again.');storeSession({...data,expires_at:Math.floor(Date.now()/1000)+data.expires_in});}).finally(()=>{refreshPromise=null;}); }
+  await refreshPromise;
+ }
+ return session.access_token;
+}
+async function database(path, options) { return api('/rest/v1/'+path,options,await readyToken()); }
 const $ = selector => document.querySelector(selector);
 function toast(message) { $('#toast').textContent = message; $('#toast').style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => { $('#toast').style.display = 'none'; }, 4500); }
-function persist(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { toast('Storage is unavailable. Your change could not be saved.'); return false; } }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
 function dateLabel(value) { return new Date(`${value}T12:00:00`).toLocaleDateString('en-US', {timeZone:'America/Detroit',weekday:'long',month:'short',day:'numeric'}); }
 function upcomingDates(now = new Date()) {
@@ -42,34 +57,119 @@ function render() {
   $('#count').textContent = `${requests.length} request${requests.length === 1 ? '' : 's'}`;
   $('#badge').textContent = requests.filter(r => r.status === 'pending').length;
   const empty = '<div class="empty"><span>🐾</span>No pickups yet.<br>Your next game-night delivery starts here.</div>';
-  $('#member-list').innerHTML = requests.length ? requests.map(r => card(r)).join('') : empty;
-  $('#bear-list').innerHTML = requests.length ? requests.map(r => card(r,true)).join('') : empty;
+  const mine = requests.filter(r => r.user_id === user?.id);
+  $('#count').textContent = `${mine.length} request${mine.length === 1 ? '' : 's'}`;
+  $('#member-list').innerHTML = !role ? '<div class="empty">Sign in with an approved playgroup account to see pickups.</div>' : mine.length ? mine.map(r => card(r)).join('') : empty;
+  $('#bear-list').innerHTML = role === 'bear' && requests.length ? requests.map(r => card(r,true)).join('') : empty;
 }
-$('#request-form').addEventListener('submit', event => {
-  event.preventDefault(); const data = new FormData(event.currentTarget);
-  const name = data.get('name').trim(), order = data.get('order').trim(), date = data.get('date');
-  if (!name || !order || !upcomingDates().includes(date)) return toast('Enter a name, order number, and upcoming game night.');
-  const next = [{id:crypto.randomUUID(),name,order,date,notes:data.get('notes').trim(),status:'pending',createdAt:new Date().toISOString()},...requests];
-  if (!persist(REQUESTS_KEY,next)) return;
-  requests = next; event.currentTarget.reset(); render(); toast('Saved locally. Try accepting it in Bear’s dashboard.');
+const fieldset = document.createElement('fieldset');
+while ($('#request-form').firstChild) fieldset.append($('#request-form').firstChild);
+$('#request-form').append(fieldset);
+function accountUI() {
+ fieldset.disabled = !role || loading;
+ $('#auth-form').hidden = !!user;
+ $('#signout').hidden = !user;
+ $('#refresh').hidden = !user;
+ $('[data-view="bear"]').hidden = role !== 'bear';
+ $('.settings').hidden = role !== 'bear';
+ if (role !== 'bear') { $('#bear').hidden = true; $('#member').hidden = false; $('[data-view="member"]').classList.add('active'); $('[data-view="bear"]').classList.remove('active'); }
+ $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'Playgroup member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
+}
+async function sync() {
+ if (loading || !session) return;
+ const epoch = authEpoch; loading = true; accountUI();
+ try {
+  const token = await readyToken();
+  const currentUser = await api('/auth/v1/user',{},token);
+  const members = await database('group_members?select=role&user_id=eq.'+encodeURIComponent(currentUser.id));
+  const currentRole = members[0]?.role || null;
+  const [rows,config] = currentRole ? await Promise.all([database('pickup_requests?select=*&order=created_at.desc&limit=500'),database('group_settings?select=*&id=eq.true')]) : [[],[]];
+  if(epoch !== authEpoch) return;
+  user = currentUser; role = currentRole; requests = rows;
+  if(config[0]) settings = config[0];
+  for (const field of ['venmo','email','bearName']) $('#settings-form').elements[field].value = settings[field] || '';
+  $('#connection-status').textContent = role ? 'CONNECTED · Updates refresh every 15 seconds while this page is open. Up to 500 recent requests shown.' : 'ACCOUNT CONNECTED · Group approval is required.';
+  render();
+ } catch(error) {
+  if(epoch !== authEpoch) return;
+  requests = []; role = null; render();
+  $('#connection-status').textContent = 'Connection unavailable. Check your connection or sign out and back in. If setup is new, the organizer must run the database setup.';
+  toast(error.message);
+ } finally { if(epoch === authEpoch) { loading = false; accountUI(); } }
+}
+async function login(create = false) {
+ if(loading) return;
+ const form = $('#auth-form'); if(!form.reportValidity()) return;
+ const data = new FormData(form); loading = true;
+ const buttons = [...form.querySelectorAll('button')]; buttons.forEach(b=>b.disabled=true);
+ try {
+  const credentials = {email:data.get('email').trim(),password:data.get('password')};
+  const redirect = location.origin+location.pathname;
+  const result = await api(create ? '/auth/v1/signup?redirect_to='+encodeURIComponent(redirect) : '/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(credentials)},null);
+  if (result.access_token) { authEpoch++; storeSession({...result,expires_at:Math.floor(Date.now()/1000)+result.expires_in}); user = result.user; form.reset(); }
+  else { $('#account-status').textContent = 'Check your email for the confirmation link, then return here to sign in. If no email arrives, contact the organizer.'; toast('Check your email to confirm your account.'); }
+ } catch(error) { toast(error.message); }
+ finally { loading = false; buttons.forEach(b=>b.disabled=false); }
+ if(session) await sync();
+}
+$('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
+$('#signup').addEventListener('click',()=>login(true));
+$('#signout').addEventListener('click',()=>{
+ const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];render();accountUI();
+ $('#connection-status').textContent='Signed out. Sign in to connect to your playgroup.';
+ if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
 });
-for (const field of ['venmo','email','bearName']) $('#settings-form').elements[field].value = settings[field] || '';
-$('#settings-form').addEventListener('submit', event => {
-  event.preventDefault(); const data = new FormData(event.currentTarget);
-  const next = Object.fromEntries(['venmo','email','bearName'].map(key => [key,data.get(key).trim()]));
-  if (!persist(SETTINGS_KEY,next)) return;
-  settings = next; render(); $('#saved').textContent = 'Saved on this device.';
+$('#refresh').addEventListener('click',sync);
+$('#request-form').addEventListener('submit', async event => {
+ event.preventDefault(); if(!role || loading) return;
+ const form = event.currentTarget, data = new FormData(form);
+ const name = data.get('name').trim(), order = data.get('order').trim(), date = data.get('date');
+ if (!name || !order || !upcomingDates().includes(date)) return toast('Enter a name, order number, and upcoming game night.');
+ fieldset.disabled = true;
+ try { await database('pickup_requests',{method:'POST',body:JSON.stringify({user_id:user.id,name,order,date,notes:data.get('notes').trim()})});form.reset();toast('Request sent to Bear.');await sync(); }
+ catch(error) { toast('Request could not be saved: '+error.message); }
+ finally { accountUI(); }
 });
-document.addEventListener('click', event => {
-  const button = event.target.closest('button'); if (!button) return;
-  if (button.dataset.view) { for (const view of document.querySelectorAll('.view')) view.hidden = view.id !== button.dataset.view; for (const tab of document.querySelectorAll('[data-view]')) tab.classList.toggle('active',tab === button); }
-  if (button.dataset.action === 'setup') { $('.settings').open = true; $('.settings').scrollIntoView({behavior:'smooth'}); }
-  const transitions = {accept:'accepted',decline:'declined',deliver:'delivered'};
-  if (transitions[button.dataset.action]) {
-    const next = requests.map(r => r.id === button.dataset.id ? {...r,status:transitions[button.dataset.action]} : r);
-    if (persist(REQUESTS_KEY,next)) { requests = next; render(); toast('Pickup updated on this device.'); }
-  }
+$('#settings-form').addEventListener('submit', async event => {
+ event.preventDefault(); if(role !== 'bear') return;
+ const data = new FormData(event.currentTarget), button = event.currentTarget.querySelector('button'); button.disabled=true;
+ const next = Object.fromEntries(['venmo','email','bearName'].map(key=>[key,data.get(key).trim()]));
+ try { await database('group_settings?id=eq.true',{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(next)});settings=next;render();$('#saved').textContent='Saved for the playgroup.'; }
+ catch(error) { toast('Settings could not be saved: '+error.message); }
+ finally {button.disabled=false;}
 });
+document.addEventListener('click', async event => {
+ const button = event.target.closest('button'); if(!button) return;
+ if(button.dataset.view) {
+  if(button.dataset.view === 'bear' && role !== 'bear') return;
+  for(const view of document.querySelectorAll('.view')) view.hidden = view.id !== button.dataset.view;
+  for(const tab of document.querySelectorAll('[data-view]')) tab.classList.toggle('active',tab===button);
+ }
+ if(button.dataset.action==='setup') {
+  if(role === 'bear') { $('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
+  else toast('Ask Bear to set his pickup name and contact details.');
+ }
+ const transitions = {accept:'accepted',decline:'declined',deliver:'delivered'};
+ if(transitions[button.dataset.action] && role === 'bear') {
+  button.disabled=true;
+  const oldStatus = button.dataset.action === 'deliver' ? 'accepted' : 'pending';
+  try {
+   const updated = await database('pickup_requests?id=eq.'+encodeURIComponent(button.dataset.id)+'&status=eq.'+oldStatus,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({status:transitions[button.dataset.action]})});
+   toast(updated.length ? 'Pickup updated for the playgroup.' : 'That request already changed. Refreshing.');await sync();
+  } catch(error) {toast('Could not update pickup: '+error.message);}
+  finally {button.disabled=false;}
+ }
+});
+// Confirmation links return a short-lived session in the URL fragment. Remove it immediately.
+const fragment = new URLSearchParams(location.hash.slice(1));
+if(fragment.has('access_token')) {
+ const access_token=fragment.get('access_token'), refresh_token=fragment.get('refresh_token');
+ history.replaceState(null,'',location.pathname+location.search);
+ if(access_token && refresh_token) storeSession({access_token,refresh_token,expires_at:Math.floor(Date.now()/1000)+Number(fragment.get('expires_in') || 3600)});
+} else if(fragment.has('error_description')) { toast(fragment.get('error_description'));history.replaceState(null,'',location.pathname+location.search); }
+accountUI();
+if(session) sync();
+setInterval(()=>{if(!document.hidden && session) sync();},15000);
 let installPrompt;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('#install').hidden = false; });
 $('#install').addEventListener('click', async () => { if (installPrompt) { await installPrompt.prompt(); installPrompt = null; $('#install').hidden = true; } });
