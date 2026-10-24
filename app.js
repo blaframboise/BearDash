@@ -73,11 +73,12 @@ function accountUI() {
  $('[data-view="bear"]').hidden = role !== 'bear';
  $('.settings').hidden = role !== 'bear';
  if (role !== 'bear') { $('#bear').hidden = true; $('#member').hidden = false; $('[data-view="member"]').classList.add('active'); $('[data-view="bear"]').classList.remove('active'); }
- $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'Playgroup member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
+ $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'BearDash member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
 }
-async function sync() {
+async function sync(manual = false) {
  if (loading || !session) return;
  const epoch = authEpoch; loading = true; accountUI();
+ $('#refresh').disabled = true; $('#refresh').textContent = 'Refreshing…';
  try {
   const token = await readyToken();
   const currentUser = await api('/auth/v1/user',{},token);
@@ -86,16 +87,19 @@ async function sync() {
   const [rows,config] = currentRole ? await Promise.all([database('pickup_requests?select=*&order=created_at.desc&limit=500'),database('group_settings?select=*&id=eq.true')]) : [[],[]];
   if(epoch !== authEpoch) return;
   user = currentUser; role = currentRole; requests = rows;
+  const nameInput = $('#request-form').elements.name;
+  if (!nameInput.value.trim()) nameInput.value = user.user_metadata?.pickup_name || rows.find(r => r.user_id === user.id)?.name || '';
   if(config[0]) settings = config[0];
   for (const field of ['venmo','email','bearName']) $('#settings-form').elements[field].value = settings[field] || '';
   $('#connection-status').textContent = role ? 'CONNECTED · Updates refresh every 15 seconds while this page is open. Up to 500 recent requests shown.' : 'ACCOUNT CONNECTED · Group approval is required.';
   render();
+  if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
   requests = []; role = null; render();
   $('#connection-status').textContent = 'Connection unavailable. Check your connection or sign out and back in. If setup is new, the organizer must run the database setup.';
   toast(error.message);
- } finally { if(epoch === authEpoch) { loading = false; accountUI(); } }
+ } finally { if(epoch === authEpoch) { loading = false; accountUI(); $('#refresh').disabled = false; $('#refresh').textContent = 'Refresh pickups'; } }
 }
 async function login(create = false) {
  if(loading) return;
@@ -115,11 +119,20 @@ async function login(create = false) {
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
 $('#signout').addEventListener('click',()=>{
- const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];render();accountUI();
+ const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
  $('#connection-status').textContent='Signed out. Sign in to connect to your playgroup.';
  if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
 });
-$('#refresh').addEventListener('click',sync);
+$('#refresh').addEventListener('click',()=>sync(true));
+$('#request-form').elements.name.addEventListener('change',async event=>{
+ const name = event.target.value.trim();
+ if (!user || !name || name.length > 80) return;
+ const epoch = authEpoch;
+ try {
+  const updated = await api('/auth/v1/user',{method:'PUT',body:JSON.stringify({data:{pickup_name:name}})},await readyToken());
+  if(epoch === authEpoch) user = updated;
+ } catch { toast('Your pickup name could not be remembered. You can still enter it for this request.'); }
+});
 $('#request-form').addEventListener('submit', async event => {
  event.preventDefault(); if(!role || loading) return;
  const form = event.currentTarget, data = new FormData(form);
