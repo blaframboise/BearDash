@@ -1,0 +1,63 @@
+const {PGlite}=require('@electric-sql/pglite');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const db=new PGlite();
+ await db.exec(`create role anon;create role authenticated;create schema auth;create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,created_at timestamptz default now());create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;grant usage on schema auth to authenticated,anon;grant execute on function auth.uid() to authenticated,anon;`);
+ const ids=Array.from({length:5},(_,i)=>`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`);
+ const emails=['benjamin.laframboise@gmail.com','bear@example.com','member@example.com','second@example.com','unapproved@example.com'];
+ for(let i=0;i<ids.length;i++)await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())',[ids[i],emails[i]]);
+ const sql=name=>fs.readFileSync(path.join(__dirname,'../supabase/',name),'utf8');
+ await db.exec(sql('setup.sql'));await db.query("insert into public.group_members(user_id,role) values($1,'member'),($2,'bear'),($3,'member'),($4,'member')",ids.slice(0,4));
+ await db.exec(sql('messages.sql'));await db.exec(sql('signup-alerts.sql'));await db.exec(sql('member-approvals.sql'));
+ const days=(await db.query("select g::date::text as day from generate_series(((now() at time zone 'America/Detroit')::date+1)::timestamp,((now() at time zone 'America/Detroit')::date+56)::timestamp,interval '1 day') g where extract(isodow from g) in (1,5) order by g")).rows.map(x=>x.day);
+ // A legacy accepted order and its conversation must survive the migration.
+ const legacy=crypto.randomUUID();await db.query('insert into public.pickup_requests(id,user_id,name,"order",date,status) values($1,$2,\'Legacy\',\'OLD-1\',$3,\'accepted\')',[legacy,ids[2],days[0]]);
+ await db.query("select set_config('request.jwt.claim.sub',$1,false)",[ids[2]]);await db.query("insert into public.pickup_messages(request_id,body) values($1,'Legacy conversation')",[legacy]);
+ await db.exec(sql('delivery-runs.sql'));
+ async function as(i,q,params=[]){await db.exec('set role authenticated');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[ids[i]]);try{return await db.query(q,params);}finally{await db.exec('reset role');}}
+ const rpc=async(i,name,args=[])=>{const placeholders=args.map((_,j)=>'$'+(j+1)).join(',');return (await as(i,`select public.${name}(${placeholders}) as r`,args)).rows[0].r;};
+ const state=i=>rpc(i,'beardash_delivery_state');
+ const submit=async(i,day,order,id=crypto.randomUUID())=>rpc(i,'beardash_submit_order',[id,day,'Member '+i,order,'note']);
+ const query=async(q,p=[]) => (await db.query(q,p)).rows;
+ const original=(await query('select * from public.pickup_requests where id=$1',[legacy]))[0];assert.ok(original.booking_id);assert.equal(original.status,'accepted');assert.equal((await as(2,'select count(*)::int as n from public.pickup_messages where request_id=$1',[legacy])).rows[0].n,1);assert.equal((await as(3,'select count(*)::int as n from public.pickup_messages where request_id=$1',[legacy])).rows[0].n,0);
+ const a=await submit(2,days[1],'A-1');const a2=await submit(2,days[1],'A-2');assert.equal(a.booking_id,a2.booking_id);assert.equal((await state(2)).bookings.filter(b=>b.run_day===days[1]).length,1);
+ const retryId=crypto.randomUUID();const retry=await submit(2,days[1],'IDEMPOTENT',retryId);const retried=await submit(2,days[1],'IDEMPOTENT',retryId);assert.equal(retry.request_id,retried.request_id);assert.equal((await query('select count(*)::int as n from public.pickup_requests where id=$1',[retryId]))[0].n,1);
+ await assert.rejects(()=>rpc(2,'beardash_pickup_run',[days[1]]),/Only Bear/);await assert.rejects(()=>rpc(1,'beardash_pickup_run',[days[1]]),/pending orders/);
+ for(const request of [a,a2,retry])await rpc(1,'beardash_order_status',[request.request_id,'accepted']);
+ await rpc(2,'beardash_payment',[a.booking_id,'report_paid',false]);await rpc(1,'beardash_payment',[a.booking_id,'confirm_paid',false]);
+ await rpc(1,'beardash_pickup_run',[days[1]]);assert.equal((await query('select status from public.pickup_requests where id=$1',[a.request_id]))[0].status,'picked_up');
+ await assert.rejects(()=>submit(2,days[1],'TOO-LATE'),/closed or cancelled/);await rpc(1,'beardash_order_status',[a.request_id,'delivered']);
+ await assert.rejects(()=>rpc(1,'beardash_schedule_run',[days[1],false,1,'late']),/picked-up run/);
+ const late=await submit(2,days[2],'NEXT-RUN');assert.notEqual(late.booking_id,a.booking_id);
+ await rpc(1,'beardash_order_status',[late.request_id,'accepted']);await rpc(2,'beardash_payment',[late.booking_id,'report_paid',false]);
+ const other=await submit(3,days[2],'OTHER-MEMBER');
+ await assert.rejects(()=>rpc(1,'beardash_schedule_run',[days[2],false,1,'Unavailable']),/number of affected/);
+ await rpc(1,'beardash_schedule_run',[days[2],false,2,'Family plans']);
+ assert.equal((await state(2)).bookings.find(b=>b.id===late.booking_id).state,'needs_choice');
+ await assert.rejects(()=>submit(2,days[2],'CANCELLED-DATE'),/closed or cancelled/);
+ await assert.rejects(()=>rpc(3,'beardash_resolve_booking',[late.booking_id,'refund',null,'thief',true]),/not awaiting your choice/);
+ await assert.rejects(()=>rpc(2,'beardash_resolve_booking',[late.booking_id,'refund',null,'',true]),/Venmo username/);
+ await assert.rejects(()=>rpc(2,'beardash_resolve_booking',[late.booking_id,'refund',null,'Member-Handle',null]),/Confirm you paid/);await rpc(2,'beardash_resolve_booking',[late.booking_id,'refund',null,'@Member-Handle',true]);
+ let refund=(await state(1)).bookings.find(b=>b.id===late.booking_id);assert.equal(refund.refund_venmo,'Member-Handle');assert.equal(refund.state,'refund_requested');assert.equal((await state(3)).bookings.some(b=>b.id===late.booking_id),false);
+ await assert.rejects(()=>rpc(2,'beardash_payment',[late.booking_id,'refund_sent',true]),/not allowed/);
+ await assert.rejects(()=>rpc(1,'beardash_payment',[late.booking_id,'refund_sent',false]),/not allowed/);
+ await rpc(1,'beardash_payment',[late.booking_id,'refund_sent',true]);await assert.rejects(()=>rpc(1,'beardash_payment',[late.booking_id,'refund_sent',true]),/not allowed/);refund=(await state(2)).bookings.find(b=>b.id===late.booking_id);assert.equal(refund.state,'refunded');assert.ok(refund.refund_sent_at);
+ await rpc(1,'beardash_schedule_run',[days[2],true,0,'']);const rejoined=await submit(2,days[2],'REJOIN-AFTER-REFUND');assert.notEqual(rejoined.booking_id,late.booking_id);assert.equal((await state(2)).bookings.find(b=>b.id===late.booking_id).state,'refunded');
+ await as(3,"insert into public.pickup_messages(request_id,body) values($1,'Keep this conversation when moving')",[other.request_id]);await rpc(3,'beardash_resolve_booking',[other.booking_id,'reschedule',days[3],null,false]);assert.equal((await as(3,'select count(*)::int as n from public.pickup_messages where request_id=$1',[other.request_id])).rows[0].n,1);assert.equal((await as(2,'select count(*)::int as n from public.pickup_messages where request_id=$1',[other.request_id])).rows[0].n,0);const moved=(await query('select * from public.pickup_requests where id=$1',[other.request_id]))[0];assert.equal(new Date(moved.date).toISOString().slice(0,10),days[3]);assert.equal(moved.status,'pending');assert.notEqual(moved.booking_id,other.booking_id);
+ // Carry a reported payment through cancellation, merge with an unpaid target, and retain IDs.
+ const paid=await submit(2,days[4],'PAID-SOURCE');await rpc(1,'beardash_order_status',[paid.request_id,'accepted']);await rpc(2,'beardash_payment',[paid.booking_id,'report_paid',false]);const target=await submit(2,days[5],'TARGET');await rpc(1,'beardash_schedule_run',[days[4],false,1,'Unavailable']);await rpc(2,'beardash_resolve_booking',[paid.booking_id,'reschedule',days[5],null,false]);assert.equal((await state(2)).bookings.find(b=>b.id===target.booking_id).payment_status,'reported');assert.equal((await query('select booking_id from public.pickup_requests where id=$1',[paid.request_id]))[0].booking_id,target.booking_id);
+ await assert.rejects(()=>rpc(2,'beardash_resolve_booking',[paid.booking_id,'refund',null,'duplicate',true]),/not awaiting your choice/);
+ // Do not silently swallow one of two paid credits when merging.
+ const double=await submit(2,days[6],'ANOTHER-PAID');await rpc(1,'beardash_order_status',[double.request_id,'accepted']);await rpc(2,'beardash_payment',[double.booking_id,'report_paid',false]);await rpc(1,'beardash_schedule_run',[days[6],false,1,'Unavailable']);await assert.rejects(()=>rpc(2,'beardash_resolve_booking',[double.booking_id,'reschedule',days[5],null,false]),/already have a paid/);
+ await rpc(1,'beardash_schedule_run',[days[6],true,0,'']);await rpc(2,'beardash_resolve_booking',[double.booking_id,'reschedule',days[6],null,false]);assert.equal((await query('select status from public.pickup_requests where id=$1',[double.request_id]))[0].status,'pending');
+ const reportedLate=await submit(3,days[8],'PAID-BUT-NOT-REPORTED');await rpc(1,'beardash_schedule_run',[days[8],false,1,'Unavailable']);await rpc(3,'beardash_resolve_booking',[reportedLate.booking_id,'reschedule',days[9],null,true]);assert.equal((await state(3)).bookings.find(b=>b.run_day===days[9]).payment_status,'reported');
+ const unpaid=await submit(3,days[7],'UNPAID');await rpc(1,'beardash_schedule_run',[days[7],false,1,'Unavailable']);await rpc(3,'beardash_resolve_booking',[unpaid.booking_id,'cancel_unpaid',null,null,false]);assert.equal((await state(3)).bookings.find(b=>b.id===unpaid.booking_id).state,'cancelled_unpaid');
+ await assert.rejects(()=>rpc(0,'beardash_schedule_run',[days[8],false,0,'Admin cannot dispatch']),/Only Bear/);
+ await assert.rejects(()=>as(2,"insert into public.pickup_requests(user_id,name,\"order\",date,booking_id) values($1,'Hack','HACK',$2,$3)",[ids[2],days[1],a.booking_id]),/permission denied/);
+ await assert.rejects(()=>as(1,"update public.pickup_requests set status='accepted' where id=$1",[a.request_id]),/permission denied/);
+ await assert.rejects(()=>as(2,"update public.delivery_bookings set state='refunded' where id=$1",[a.booking_id]),/permission denied/);
+ await assert.rejects(()=>rpc(4,'beardash_delivery_state'),/Approved membership/);
+ await rpc(1,'beardash_send_mail',['Hello group','General announcement']);const mail=(await state(2)).mail;assert.ok(mail.some(m=>m.title==='Hello group'));const ownNotice=mail.find(m=>m.recipient_id===ids[2]);assert.ok(ownNotice);assert.equal((await state(3)).mail.some(m=>m.id===ownNotice.id),false);await assert.rejects(()=>rpc(3,'beardash_read_mail',[ownNotice.id]),/Message not found/);await rpc(2,'beardash_read_mail',[ownNotice.id]);assert.equal((await state(2)).mail.find(m=>m.id===ownNotice.id).is_read,true);
+ await db.exec('set role anon');await assert.rejects(()=>db.query('select public.beardash_delivery_state()'),/permission denied/);await db.exec('reset role');
+ await db.close();console.log('PASS PostgreSQL: backfill, fee grouping, retry idempotency, pending/cutoff locks, next-run fee, cancellation confirmation, private choices/refunds, one refund, payment carry/merge protection, reopened runs, unpaid cancellation, Bear-only controls, direct-write rejection, unapproved/anonymous denial, BearMail privacy/read receipts. Hosted migration still required.');
+})().catch(e=>{console.error(e);process.exit(1)});

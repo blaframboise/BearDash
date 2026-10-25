@@ -1,0 +1,65 @@
+// Browser + real local PostgreSQL integration. Supabase Auth is simulated; SQL/RLS are executed.
+const {PGlite}=require('@electric-sql/pglite');
+const {chromium}=require('playwright');
+const {spawn}=require('node:child_process');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const db=new PGlite();let browser,server;
+ try{
+  await db.exec(`create role anon;create role authenticated;create schema auth;create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,created_at timestamptz default now());create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;grant usage on schema auth to authenticated,anon;grant execute on function auth.uid() to authenticated,anon;`);
+  const ids=Array.from({length:4},(_,i)=>`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`);
+  for(let i=0;i<4;i++)await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())',[ids[i],i===0?'benjamin.laframboise@gmail.com':`test${i}@example.com`]);
+  for(const file of ['setup.sql','messages.sql','signup-alerts.sql'])await db.exec(fs.readFileSync(path.join(__dirname,'../supabase',file),'utf8'));
+  await db.query("insert into public.group_members(user_id,role) values($1,'member'),($2,'bear'),($3,'member'),($4,'member')",ids);
+  for(const file of ['member-approvals.sql','delivery-runs.sql'])await db.exec(fs.readFileSync(path.join(__dirname,'../supabase',file),'utf8'));
+  const days=(await db.query("select g::date::text as day from generate_series(((now() at time zone 'America/Detroit')::date+1)::timestamp,((now() at time zone 'America/Detroit')::date+20)::timestamp,interval '1 day') g where extract(isodow from g) in (1,5) order by g")).rows.map(x=>x.day);
+  let queue=Promise.resolve();const metadata=new Map(ids.map((id,i)=>[id,{pickup_name:`Member ${i}`}])) ;
+  function as(id,query,params=[]){const task=queue.then(async()=>{await db.exec(id?'set role authenticated':'set role anon');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id || '']);try{return await db.query(query,params);}finally{await db.exec('reset role');}});queue=task.catch(()=>{});return task;}
+  server=spawn('python3',['-m','http.server','8123','--bind','127.0.0.1'],{cwd:path.join(__dirname,'..'),stdio:'ignore'});await new Promise(r=>setTimeout(r,500));
+  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH || '/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+  const errors=[];
+  async function pageFor(index){
+   const context=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+   await context.addInitScript(id=>{localStorage.setItem('beardash.auth',JSON.stringify({access_token:id,refresh_token:'test',expires_at:Math.floor(Date.now()/1000)+3600,user:{id}}));},ids[index]);
+   await context.route('https://bvokijnmogjmftkggbxn.supabase.co/**',async route=>{
+    const request=route.request(),url=new URL(request.url()),id=request.headers().authorization?.replace('Bearer ','');
+    try{
+     let data;const endpoint=url.pathname.split('/').at(-1);
+     if(url.pathname==='/auth/v1/user'){
+      if(request.method()==='PUT')metadata.set(id,{...metadata.get(id),...request.postDataJSON().data});
+      data={id,email:`test${index}@example.com`,user_metadata:metadata.get(id)};
+     }else if(url.pathname.includes('/rpc/')){
+      const allowed=['beardash_delivery_state','beardash_approval_state','beardash_submit_order','beardash_order_status','beardash_pickup_run','beardash_schedule_run','beardash_resolve_booking','beardash_payment','beardash_send_mail','beardash_read_mail'];
+      assert.ok(allowed.includes(endpoint),endpoint);const body=request.postDataJSON() || {};const keys=Object.keys(body);assert.ok(keys.every(key=>/^[a-z_]+$/.test(key)));
+      const args=keys.map((key,i)=>`${key}=>$${i+1}`).join(',');data=(await as(id,`select public.${endpoint}(${args}) as data`,Object.values(body))).rows[0].data;
+     }else if(endpoint==='group_members')data=(await as(id,'select role from public.group_members where user_id=$1',[id])).rows;
+     else if(endpoint==='pickup_requests')data=(await as(id,"select coalesce(jsonb_agg(to_jsonb(p) order by created_at desc),'[]') as data from public.pickup_requests p")).rows[0].data;
+     else if(endpoint==='group_settings')data=(await as(id,"select coalesce(jsonb_agg(to_jsonb(s)),'[]') as data from public.group_settings s")).rows[0].data;
+     else throw Error('Unexpected endpoint '+url.pathname);
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data ?? null)});
+    }catch(error){await route.fulfill({status:error.code==='42501'?403:400,contentType:'application/json',body:JSON.stringify({message:error.message})});}
+   });
+   const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));await p.goto('http://127.0.0.1:8123');await p.waitForFunction(()=>window.BearDashDelivery?.ready);return p;
+  }
+  const member=await pageFor(2),bear=await pageFor(1),second=await pageFor(3);
+  async function newOrder(page,day,order){await page.locator('nav [data-view=request]').click();await page.locator('#dates').selectOption(day);await page.getByLabel('Your name').fill('Test Member');await page.getByLabel('Order number').fill(order);await page.getByRole('button',{name:'Send pickup request'}).click();await page.locator('#member-list').getByRole('heading',{name:order,exact:true}).waitFor();}
+  await newOrder(member,days[0],'RUN-1');await member.getByRole('button',{name:'Add another order · no extra fee'}).click();assert.match(await member.locator('#run-quote').textContent(),/No additional \$5/);await member.getByLabel('Order number').fill('RUN-2');await member.getByRole('button',{name:'Send pickup request'}).click();await member.locator('#member-list').getByRole('heading',{name:'RUN-2',exact:true}).waitFor();assert.equal(await member.locator('#member-list .run-booking').count(),1);
+  await bear.reload();await bear.waitForFunction(()=>window.BearDashDelivery?.ready);for(const name of ['RUN-1','RUN-2']){await bear.locator('.card').filter({has:bear.getByRole('heading',{name,exact:true})}).getByRole('button',{name:'Accept pickup'}).click();await bear.waitForTimeout(200);}
+  await member.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await member.getByRole('link',{name:'Open Venmo app · $5'}).waitFor();assert.equal(await member.getByRole('link',{name:'Open Venmo app · $5'}).count(),1);
+  await bear.getByRole('button',{name:'Pickup Schedule / Picked Up',exact:true}).click();let schedule=bear.locator('#schedule-list .card').filter({has:bear.getByRole('heading',{name:new RegExp(new Date(days[0]+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'}))})}).first();await schedule.getByRole('button',{name:'Mark run Picked Up'}).click();await bear.locator('#delivery-action-confirm').click();await bear.locator('#delivery-action-dialog').waitFor({state:'hidden'});
+  await member.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await member.waitForFunction(day=>document.querySelector(`#dates option[value="${day}"]`).disabled,days[0]);await member.locator('nav [data-view=request]').click();await member.locator('#dates').selectOption(days[1]);assert.match(await member.locator('#run-quote').textContent(),/already picked up/);
+  await newOrder(member,days[1],'CANCEL-A');await newOrder(second,days[1],'CANCEL-B');
+  await bear.reload();await bear.waitForFunction(()=>window.BearDashDelivery?.ready);await bear.locator('.card').filter({has:bear.getByRole('heading',{name:'CANCEL-A',exact:true})}).getByRole('button',{name:'Accept pickup'}).click();await bear.waitForTimeout(200);
+  await member.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await member.locator('.run-booking').filter({has:member.getByRole('heading',{name:'CANCEL-A',exact:true})}).getByRole('button',{name:'I sent the $5'}).click();await member.locator('#delivery-action-confirm').click();await member.locator('#delivery-action-dialog').waitFor({state:'hidden'});
+  await bear.getByRole('button',{name:'Pickup Schedule / Picked Up',exact:true}).click();schedule=bear.locator('#schedule-list .card').filter({has:bear.getByRole('heading',{name:new RegExp(new Date(days[1]+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'}))})}).first();await schedule.getByRole('button',{name:'Turn off this date'}).click();assert.match(await bear.locator('#delivery-action-copy').textContent(),/2 members currently scheduled/);await bear.locator('#cancel-reason').fill('Family plans');await bear.locator('#delivery-action-confirm').click();await bear.locator('#delivery-action-dialog').waitFor({state:'hidden'});
+  await member.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await member.getByRole('button',{name:'Refund or choose another date'}).waitFor();assert.match(await member.locator('#delivery-banner').textContent(),/NO BEARDASH AVAILABLE/);await member.getByRole('button',{name:'Refund or choose another date'}).click();await member.locator('#booking-choice-form [name=resolution]').selectOption('refund');await member.getByLabel('Your Venmo username').fill('@Member-Refund');await member.locator('#booking-choice-form [name=paid]').check();await member.getByRole('button',{name:'Confirm choice',exact:true}).click();await member.locator('#booking-choice-dialog').waitFor({state:'hidden'});assert.match(await member.locator('#member-list').textContent(),/refund requested/);
+  await second.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await second.getByRole('button',{name:'Refund or choose another date'}).click();await second.locator('#booking-choice-form [name=day]').selectOption(days[2]);await second.getByRole('button',{name:'Confirm choice',exact:true}).click();await second.locator('#booking-choice-dialog').waitFor({state:'hidden'});assert.match(await second.locator('#member-list').textContent(),/CANCEL-B/);
+  await bear.getByRole('button',{name:/Open account menu/}).click();await bear.locator('#account-menu [data-view=refunds]').click();await bear.locator('#refunds [data-delivery-action=refresh]').click();const refundLink=bear.getByRole('link',{name:'Open Venmo to refund $5'});await refundLink.waitFor();const link=new URL(await refundLink.getAttribute('href'));assert.equal(link.searchParams.get('recipients'),'Member-Refund');assert.equal(link.searchParams.get('amount'),'5.00');await bear.getByRole('button',{name:'Mark refund sent',exact:true}).click();assert.match(await bear.locator('#delivery-action-copy').textContent(),/@Member-Refund/);await bear.locator('#delivery-action-confirm').click();await bear.locator('#delivery-action-dialog').waitFor({state:'hidden'});
+  await member.locator('#member .section-title').getByRole('button',{name:'Refresh',exact:true}).click();await member.waitForFunction(()=>document.querySelector('#member-list').textContent.includes('Bear marked $5 refund sent'));
+  await bear.getByRole('button',{name:/Open account menu/}).click();await bear.locator('#account-menu [data-view=bearmail]').click();await bear.locator('#mail-compose [name=title]').fill('Game night update');await bear.locator('#mail-compose [name=body]').fill('See everyone Friday!');await bear.getByRole('button',{name:'Send BearMail',exact:true}).click();await bear.waitForFunction(()=>document.querySelector('#mail-compose-status').textContent.includes('sent'));
+  await member.getByRole('button',{name:/Open account menu/}).click();await member.locator('#account-menu [data-view=bearmail]').click();await member.locator('#bearmail [data-delivery-action=refresh]').click();const message=member.locator('#mail-list .card').filter({has:member.getByRole('heading',{name:'Game night update',exact:true})});await message.waitFor();await message.getByRole('button',{name:'Mark read'}).click();await member.waitForTimeout(250);assert.equal(await member.locator('#mail-compose').isVisible(),false);
+  for(const page of [member,bear,second])for(const size of [{width:390,height:844},{width:844,height:390},{width:1280,height:900}]){await page.setViewportSize(size);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);}
+  assert.deepEqual(errors,[]);await member.screenshot({path:'/tmp/beardash-bearmail.png',fullPage:true});
+  console.log('PASS browser + PostgreSQL: one fee/button for two orders, add-on quote, acceptance, Picked Up cutoff, next-run fee warning, cancellation member count/banner, conditional Venmo refund form, rescheduling, Bear refund URI/confirmation, sent state, BearMail announce/read and roles, three viewport sizes. Live Supabase/Auth and real Venmo remain separate checks.');
+ }finally{if(browser)await browser.close();if(server)server.kill();await db.close();}
+})().catch(error=>{console.error(error);process.exit(1)});

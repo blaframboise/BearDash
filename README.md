@@ -29,3 +29,7 @@ GitHub Pages deploys master at https://blaframboise.github.io/BearDash/. No fron
 ## App screens
 
 Members have Main, My Pickups, and Request a Pickup screens. Main includes ordering instructions and the store homepage link. Account sign-in, sign-out, refresh, and Bear settings live in the header menu. Bear-role accounts open directly to the delivery dashboard, with member screens hidden. These interface distinctions supplement the existing database role policies. Store checkout and copying order numbers remain manual.
+
+## Delivery runs, cancellations, BearMail, and refunds
+
+This update adds one $5 booking per member/run (including extra orders), Bear's Picked Up cutoff, date availability, cancellation banners, BearMail, member rescheduling/refund choices, and manual Venmo refund controls. **Activate it by running [delivery-runs.sql](supabase/delivery-runs.sql) once.** Follow the [activation and validation guide](supabase/DELIVERY-RUNS.md). Existing pickups/conversations stay intact; historical payments are not assumed verified. Payments/refunds remain manual Venmo transactions. BearMail has in-app unread indicators, not background phone notifications. Gamer's Gauntlet accepts the authorization email process, as confirmed by the organizer.

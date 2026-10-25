@@ -124,9 +124,10 @@ setInterval(()=>{if(!document.hidden && session && approvalState.can_approve) re
 let activeView='home', navigationRole;
 function showView(id, scroll=true) {
  if(id==='approvals' && !approvalState.can_approve) return;
- if(role==='bear' && id!=='approvals') id='bear';
+ if(['schedule','refunds'].includes(id) && role!=='bear') return;
+ if(role==='bear' && !['approvals','bearmail','schedule','refunds'].includes(id)) id='bear';
  else if(id==='bear') id='home';
- if(!['home','member','request','bear','approvals'].includes(id)) return;
+ if(!['home','member','request','bear','approvals','bearmail','schedule','refunds'].includes(id)) return;
  activeView=id;
  for(const view of document.querySelectorAll('main > .view')) view.hidden=view.id!==id;
  for(const tab of document.querySelectorAll('nav [data-view]')) {tab.classList.toggle('active',tab.dataset.view===id);if(tab.dataset.view===id)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}
@@ -135,13 +136,13 @@ function showView(id, scroll=true) {
 for(const logo of document.querySelectorAll('.brand')) logo.addEventListener('click',event=>{event.preventDefault();showView(role==='bear'?'bear':'home');});
 function toast(message) { $('#toast').textContent = message; $('#toast').style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => { $('#toast').style.display = 'none'; }, 4500); }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
-function dateLabel(value) { return new Date(`${value}T12:00:00`).toLocaleDateString('en-US', {timeZone:'America/Detroit',weekday:'long',month:'short',day:'numeric'}); }
+function dateLabel(value) { return new Date(`${value}T16:00:00Z`).toLocaleDateString('en-US', {timeZone:'America/Detroit',weekday:'long',month:'short',day:'numeric'}); }
 function upcomingDates(now = new Date()) {
   const local = new Intl.DateTimeFormat('en-CA', {timeZone:'America/Detroit',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);
   const part = type => local.find(p => p.type === type).value;
   const day = new Date(`${part('year')}-${part('month')}-${part('day')}T12:00:00Z`);
   const result = [];
-  for (let i = 0; i < 29; i++) { if ([1,5].includes(day.getUTCDay())) result.push(day.toISOString().slice(0,10)); day.setUTCDate(day.getUTCDate() + 1); }
+  for (let i = 0; i < 57; i++) { if ([1,5].includes(day.getUTCDay())) result.push(day.toISOString().slice(0,10)); day.setUTCDate(day.getUTCDate() + 1); }
   return result;
 }
 $('#dates').innerHTML = upcomingDates().map(date => `<option value="${date}">${dateLabel(date)}</option>`).join('');
@@ -203,16 +204,16 @@ $('#message-form').addEventListener('submit',async event=>{
 });
 setInterval(()=>{if(!document.hidden && conversation.open && !sendingMessage) loadMessages();},15000);
 function card(request, bear = false) {
-  const statusNames = {pending:'Waiting for Bear',accepted:'Accepted',declined:'Declined',delivered:'Delivered'};
+  const statusNames = {pending:'Waiting for Bear',accepted:'Accepted',picked_up:'Picked Up',declined:'Declined',delivered:'Delivered',reschedule_required:'Choose another date',cancelled:'Cancelled'};
   let actions = '';
   if (bear && request.status === 'pending') actions = `<button data-action="accept" data-id="${escapeHTML(request.id)}">Accept pickup ✓</button><button data-action="decline" data-id="${escapeHTML(request.id)}">Decline</button>`;
-  if (bear && request.status === 'accepted') actions = `<button data-action="deliver" data-id="${escapeHTML(request.id)}">Mark delivered ✓</button>`;
+  if (bear && request.status === 'picked_up') actions = `<button data-action="deliver" data-id="${escapeHTML(request.id)}">Mark delivered ✓</button>`;
   if (!bear && request.status === 'accepted') {
-    actions = settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}">Open Venmo app · $5 ↗</a>` : '<button data-action="setup">Set Bear’s Venmo</button>';
+    actions = !window.BearDashDelivery && settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}">Open Venmo app · $5 ↗</a>` : (window.BearDashDelivery ? '' : '<button data-action="setup">Set Bear’s Venmo</button>');
     actions += settings.email && settings.bearName ? `<a href="${escapeHTML(emailLink(request))}">Compose store email ↗</a>` : '<button data-action="setup">Set pickup email & name</button>';
   }
   actions += `<button type="button" data-action="conversation" data-id="${escapeHTML(request.id)}">Conversation ↗</button>`;
-  return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear ? '<p>Open Venmo app requires Venmo installed. If it does not open, find @' + escapeHTML(settings.venmo) + ' in Venmo and enter $5 manually. Confirm the recipient before paying. Review and send the authorization from your own email account. These links do not confirm payment or email delivery.</p>' : ''}<div class="actions">${actions}</div></article>`;
+  return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear && !window.BearDashDelivery ? '<p>Open Venmo app requires Venmo installed. If it does not open, find @' + escapeHTML(settings.venmo) + ' in Venmo and enter $5 manually. Confirm the recipient before paying. Review and send the authorization from your own email account. These links do not confirm payment or email delivery.</p>' : ''}<div class="actions">${actions}</div></article>`;
 }
 function render() {
   $('#count').textContent = `${requests.length} request${requests.length === 1 ? '' : 's'}`;
@@ -222,12 +223,13 @@ function render() {
   $('#count').textContent = `${mine.length} request${mine.length === 1 ? '' : 's'}`;
   $('#member-list').innerHTML = !role ? '<div class="empty">Sign in with an approved playgroup account to see pickups.</div>' : mine.length ? mine.map(r => card(r)).join('') : empty;
   $('#bear-list').innerHTML = role === 'bear' && requests.length ? requests.map(r => card(r,true)).join('') : empty;
+  window.BearDashDelivery?.render();
 }
 const fieldset = document.createElement('fieldset');
 while ($('#request-form').firstChild) fieldset.append($('#request-form').firstChild);
 $('#request-form').append(fieldset);
 function accountUI() {
- fieldset.disabled = !role || role === 'bear' || loading;
+ fieldset.disabled = !role || role === 'bear' || loading || (window.BearDashDelivery && (!window.BearDashDelivery.ready || !$('#dates').value));
  $('#auth-form').hidden = !!user;
  $('#signout').hidden = !user;
  $('#refresh').hidden = !user;
@@ -257,15 +259,17 @@ async function sync(manual = false) {
   if (!nameInput.value.trim()) nameInput.value = user.user_metadata?.pickup_name || rows.find(r => r.user_id === user.id)?.name || '';
   if(config[0]) settings = config[0];
   for (const field of ['venmo','email','bearName']) $('#settings-form').elements[field].value = settings[field] || '';
-  $('#connection-status').textContent = role ? 'CONNECTED · Updates refresh every 15 seconds while this page is open. Up to 500 recent requests shown.' : 'ACCOUNT CONNECTED · Group approval is required.';
+  $('#connection-status').textContent = role ? 'CONNECTED · Updates refresh about every 15 seconds while this page is open.' : 'ACCOUNT CONNECTED · Group approval is required.';
   await refreshApprovals();
+  if(epoch!==authEpoch)return;
+  await window.BearDashDelivery?.refresh();
   if(epoch!==authEpoch)return;
   render();
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
   if(error.reauthenticate || error.status===401) {endSession();$('#account-status').textContent='Your session has expired or was revoked. Please sign in again.';$('#connection-status').textContent='Please sign in again to reconnect.';return;}
-  closeConversation();clearApprovals();requests = []; role = null; syncError=error.message; render();
+  closeConversation();clearApprovals();window.BearDashDelivery?.reset();requests = []; role = null; syncError=error.message; render();
   $('#connection-status').textContent = 'Could not load your account: '+error.message;
   $('#account-status').textContent = 'Account connection failed. See the connection message below, then retry Refresh pickups.';
   toast(error.message);
@@ -296,7 +300,7 @@ async function login(create = false) {
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
 function endSession() {
- closeConversation();clearApprovals();
+ closeConversation();clearApprovals();window.BearDashDelivery?.reset();
  authEpoch++;loading=false;storeSession(null);user=null;role=null;requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
  $('#connection-status').textContent='Signed out. Sign in to connect to BearDash.';
 }
@@ -331,6 +335,11 @@ $('#request-form').addEventListener('submit', async event => {
  const form = event.currentTarget, data = new FormData(form);
  const name = data.get('name').trim(), order = data.get('order').trim(), date = data.get('date');
  if (!name || !order || !upcomingDates().includes(date)) return toast('Enter a name, order number, and upcoming game night.');
+ if(window.BearDashDelivery) {
+  fieldset.disabled=true;
+  try {await window.BearDashDelivery.submit(form,data);}catch(error){toast(error.message);}finally{accountUI();}
+  return;
+ }
  fieldset.disabled = true;
  try { await database('pickup_requests',{method:'POST',body:JSON.stringify({user_id:user.id,name,order,date,notes:data.get('notes').trim()})});form.reset();toast('Request sent to Bear.');await sync();showView('member'); }
  catch(error) { toast('Request could not be saved: '+error.message); }
@@ -353,6 +362,7 @@ document.addEventListener('click', async event => {
   else toast('Ask Bear to set his pickup name and contact details.');
  }
  const transitions = {accept:'accepted',decline:'declined',deliver:'delivered'};
+ if(transitions[button.dataset.action] && role==='bear' && window.BearDashDelivery) {await window.BearDashDelivery.orderAction(button.dataset.id,button.dataset.action);return;}
  if(transitions[button.dataset.action] && role === 'bear') {
   button.disabled=true;
   const oldStatus = button.dataset.action === 'deliver' ? 'accepted' : 'pending';
