@@ -27,7 +27,7 @@ Bear sets his pickup name in Playgroup setup after signing in. The store must re
 
 Use separate browser profiles/devices: member A, member B, Bear, and signed out. Confirm signed-out users cannot read/write tables, each member sees only their requests, members cannot change status/settings/roles or submit as another user, nonmembers see no group data, Bear sees both requests and can accept them, and the respective member sees acceptance after refresh. Confirm valid transitions and reject acceptance after delivery. Verify the real mobile Venmo and email handoff without assuming sending occurred. These hosted policies cannot be verified until SQL is applied; UI mocks do not prove authorization.
 
-Only the public project URL and publishable key are in the frontend. Never add a service-role/secret key or database password. The service worker caches static assets only, never Supabase requests. Sign-out clears displayed group data. Auth session tokens live in sessionStorage and are cleared on sign-out; use a trusted device and close the tab when finished.
+Only the public project URL and publishable key are in the frontend. Never add a service-role/secret key or database password. The service worker caches static assets only, never Supabase requests. Sign-out clears displayed group data. Auth sessions are remembered in localStorage (with a sessionStorage fallback) and cleared on sign-out. Use a trusted device and sign out on shared devices; closing the app alone no longer signs you out.
 
 ## Pickup conversations (additional setup)
 

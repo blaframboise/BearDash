@@ -5,20 +5,33 @@ let user = null, role = null, loading = false;
 let approvalState={can_approve:false,is_admin:false,own_status:"pending",pending:[]};
 const PROJECT = 'https://bvokijnmogjmftkggbxn.supabase.co';
 const PUBLIC_KEY = 'sb_publishable_h1qDQ4i4AQ2KhY3r7tMROA_3ttUMRqW';
-let session = null;
-try { session = JSON.parse(sessionStorage.getItem('beardash.auth')); } catch {}
+const AUTH_KEY='beardash.auth';
+function readStoredSession(storage) {
+ try {const value=JSON.parse(storage.getItem(AUTH_KEY));return value && typeof value.access_token==='string' && typeof value.refresh_token==='string' ? value : null;} catch {return null;}
+}
+let session=null;
+try {session=readStoredSession(localStorage);} catch {}
+if(!session) {let signedOut=false;try{signedOut=localStorage.getItem('beardash.signedOut')==='true';}catch{}
+ if(!signedOut) {try {session=readStoredSession(sessionStorage);} catch {}}
+}
 let authEpoch = 0, refreshPromise;
-function storeSession(value) { session = value; try { if(value) sessionStorage.setItem('beardash.auth',JSON.stringify(value)); else sessionStorage.removeItem('beardash.auth'); } catch {} }
+function storeSession(value) {
+ session=value;
+ try {if(value) {localStorage.setItem(AUTH_KEY,JSON.stringify(value));localStorage.removeItem('beardash.signedOut');}else {localStorage.setItem('beardash.signedOut','true');localStorage.removeItem(AUTH_KEY);}} catch {}
+ try {if(value) sessionStorage.setItem(AUTH_KEY,JSON.stringify(value));else sessionStorage.removeItem(AUTH_KEY);} catch {}
+}
+// Migrate existing tab-only logins without asking users to sign in again.
+if(session) storeSession(session);
 async function api(path, options = {}, token = session?.access_token) {
  const response = await fetch(PROJECT + path, {...options,signal:options.signal || AbortSignal.timeout(20000),cache:'no-store',headers:{apikey:PUBLIC_KEY,...(token ? {Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json',...options.headers}});
  const data = await response.json().catch(()=>null);
- if (!response.ok) throw new Error(data?.msg || data?.error_description || data?.message || `Connection failed (${response.status})`);
+ if (!response.ok) {const error=new Error(data?.msg || data?.error_description || data?.message || `Connection failed (${response.status})`);error.status=response.status;throw error;}
  return data;
 }
 async function readyToken() {
  if (!session) throw new Error('Please sign in first.');
- if (session.expires_at * 1000 < Date.now()+60000) {
-  if (!refreshPromise) { const epoch = authEpoch; refreshPromise = api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})},null).then(data=>{if(epoch !== authEpoch) throw new Error('Session changed. Please sign in again.');storeSession({...data,expires_at:Math.floor(Date.now()/1000)+data.expires_in});}).finally(()=>{refreshPromise=null;}); }
+ if (!Number.isFinite(session.expires_at) || session.expires_at * 1000 < Date.now()+60000) {
+  if (!refreshPromise) { const epoch = authEpoch; refreshPromise = api('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})},null).then(data=>{if(epoch !== authEpoch) throw new Error('Session changed. Please sign in again.');storeSession({...data,expires_at:Math.floor(Date.now()/1000)+data.expires_in});}).catch(error=>{if(error.status===400 || error.status===401 || error.status===403)error.reauthenticate=true;throw error;}).finally(()=>{refreshPromise=null;}); }
   await refreshPromise;
  }
  return session.access_token;
@@ -251,6 +264,7 @@ async function sync(manual = false) {
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
+  if(error.reauthenticate || error.status===401) {endSession();$('#account-status').textContent='Your session has expired or was revoked. Please sign in again.';$('#connection-status').textContent='Please sign in again to reconnect.';return;}
   closeConversation();clearApprovals();requests = []; role = null; syncError=error.message; render();
   $('#connection-status').textContent = 'Could not load your account: '+error.message;
   $('#account-status').textContent = 'Account connection failed. See the connection message below, then retry Refresh pickups.';
@@ -281,12 +295,25 @@ async function login(create = false) {
 }
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
-$('#signout').addEventListener('click',()=>{
+function endSession() {
  closeConversation();clearApprovals();
- const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
- $('#connection-status').textContent='Signed out. Sign in to connect to your playgroup.';
+ authEpoch++;loading=false;storeSession(null);user=null;role=null;requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
+ $('#connection-status').textContent='Signed out. Sign in to connect to BearDash.';
+}
+$('#signout').addEventListener('click',()=>{
+ const token=session?.access_token;endSession();
  if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
 });
+window.addEventListener('storage',event=>{
+ if(event.key!==AUTH_KEY && event.key!==null)return;
+ let updated=null;try {updated=readStoredSession(localStorage);}catch {}
+ if(!updated) {if(session)endSession();return;}
+ if(!session || (updated.user?.id && user?.id && updated.user.id!==user.id)) {location.reload();return;}
+ // Token refreshes in another tab must not erase an unfinished request or message.
+ session=updated;try{sessionStorage.setItem(AUTH_KEY,JSON.stringify(updated));}catch {}
+});
+window.addEventListener('online',()=>{if(session)sync();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden && session)sync();});
 $('#refresh').addEventListener('click',()=>sync(true));
 const pickupRefresh=document.createElement('button');pickupRefresh.type='button';pickupRefresh.textContent='Refresh';pickupRefresh.addEventListener('click',()=>sync(true));$('#member .section-title').append(pickupRefresh);
 

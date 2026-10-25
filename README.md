@@ -10,7 +10,7 @@ The project URL and publishable key in app.js are intentionally public browser c
 
 Members request pickups, Bear accepts/declines/marks delivery, and accepted requests unlock a $5 Venmo link and prewritten store authorization email. Users must review and send both; links do not verify payment or email delivery. Bear sets his recognized pickup name in Playgroup setup. Confirm the store permits third-party pickup.
 
-Requests refresh every 15 seconds while the page is open, or manually with Refresh pickups. No background notifications are configured. Old local-preview requests are not imported. Account sessions use sessionStorage; sign-out clears session and displayed records. Only static app assets are cached offline; shared requests require network access.
+Requests refresh every 15 seconds while the page is open, or manually with Refresh pickups. No background notifications are configured. Old local-preview requests are not imported. Account sessions are remembered in localStorage and refreshed automatically; sign-out clears local/session storage and displayed records. Only static app assets are cached offline; shared requests require network access.
 
 ## Local development
 
