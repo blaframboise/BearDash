@@ -81,17 +81,17 @@ function emailLink(request) {
   const body = `Hello Gamer’s Gauntlet,\n\nI authorize ${settings.bearName} to pick up my order ${request.order}, placed under ${request.name}, on ${dateLabel(request.date)}.\n\nPlease let me know if you need any additional information or authorization.\n\nThank you,\n${request.name}`;
   return `mailto:${encodeURIComponent(settings.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
-function venmoLink(request) { return `https://venmo.com/${encodeURIComponent(settings.venmo)}?txn=pay&amount=5.00&note=${encodeURIComponent(`BearDash pickup: ${request.order} · ${request.name}`)}`; }
+function venmoLink(request) { return `venmo://paycharge?txn=pay&recipients=${encodeURIComponent(settings.venmo)}&amount=5.00&note=${encodeURIComponent(`BearDash pickup: ${request.order} · ${request.name}`)}`; }
 function card(request, bear = false) {
   const statusNames = {pending:'Waiting for Bear',accepted:'Accepted',declined:'Declined',delivered:'Delivered'};
   let actions = '';
   if (bear && request.status === 'pending') actions = `<button data-action="accept" data-id="${escapeHTML(request.id)}">Accept pickup ✓</button><button data-action="decline" data-id="${escapeHTML(request.id)}">Decline</button>`;
   if (bear && request.status === 'accepted') actions = `<button data-action="deliver" data-id="${escapeHTML(request.id)}">Mark delivered ✓</button>`;
   if (!bear && request.status === 'accepted') {
-    actions = settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}" target="_blank" rel="noopener noreferrer">Open Venmo · $5 ↗</a>` : '<button data-action="setup">Set Bear’s Venmo</button>';
+    actions = settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}">Open Venmo app · $5 ↗</a><a href="https://venmo.com/u/${encodeURIComponent(settings.venmo)}" target="_blank" rel="noopener noreferrer">Venmo profile ↗</a>` : '<button data-action="setup">Set Bear’s Venmo</button>';
     actions += settings.email && settings.bearName ? `<a href="${escapeHTML(emailLink(request))}">Compose store email ↗</a>` : '<button data-action="setup">Set pickup email & name</button>';
   }
-  return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear ? '<p>Confirm the recipient and $5 in Venmo. Review and send the authorization from your own email account. Opening these links does not confirm payment or delivery of email.</p>' : ''}<div class="actions">${actions}</div></article>`;
+  return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear ? '<p>Open Venmo app requires Venmo installed. If it does not open, use Venmo profile or find @' + escapeHTML(settings.venmo) + ' in Venmo and enter $5 manually. Confirm the recipient before paying. Review and send the authorization from your own email account. These links do not confirm payment or email delivery.</p>' : ''}<div class="actions">${actions}</div></article>`;
 }
 function render() {
   $('#count').textContent = `${requests.length} request${requests.length === 1 ? '' : 's'}`;
