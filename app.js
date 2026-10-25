@@ -34,6 +34,10 @@ const accountMenu = document.createElement('dialog');accountMenu.id='account-men
 const closeMenu=document.createElement('button');closeMenu.textContent='Close ×';closeMenu.className='close-menu';closeMenu.type='button';
 accountMenu.append(closeMenu,$('.account'),$('#connection-status'),$('.settings'));
 accountMenu.querySelector('.account h2').id='account-menu-title';document.body.append(accountMenu);
+const menuLinks=document.createElement('div');menuLinks.className='menu-links';menuLinks.setAttribute('aria-label','BearDash shortcuts');
+menuLinks.innerHTML='<p class="eyebrow">BEARDASH MENU</p><button type="button" data-view="home" data-member-menu>Home</button><button type="button" data-view="member" data-member-menu>My Pickups</button><button type="button" data-view="request" data-member-menu>Request a Pickup</button><button type="button" data-view="bear" data-bear-menu hidden>Bear’s Dashboard</button><button type="button" id="account-shortcut">My BearDash Account</button><a href="https://www.gamersgauntlet.net/" target="_blank" rel="noopener noreferrer">Link to Gamer’s ↗</a><a id="support-link" href="https://github.com/blaframboise/BearDash/issues/new?title=BearDash%20app%20feedback&amp;body=Describe%20the%20app%20problem%20or%20suggestion%20here.%20Do%20not%20include%20order%20numbers%2C%20passwords%2C%20or%20personal%20information." target="_blank" rel="noopener noreferrer">Contact BearDash App Support ↗</a><small class="muted">App feedback opens a public GitHub issue and requires a GitHub account. For pickup questions, contact Bear directly for now.</small>';
+accountMenu.insertBefore(menuLinks,accountMenu.querySelector('.account'));
+$('#account-shortcut').addEventListener('click',()=>{const heading=accountMenu.querySelector('.account h2');heading.setAttribute('tabindex','-1');heading.scrollIntoView({behavior:'smooth',block:'start'});heading.focus({preventScroll:true});});
 menuButton.addEventListener('click',()=>{accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');});
 closeMenu.addEventListener('click',()=>accountMenu.close());
 accountMenu.addEventListener('close',()=>menuButton.setAttribute('aria-expanded','false'));
@@ -108,6 +112,8 @@ function accountUI() {
  $('#refresh').hidden = !user;
  $('[data-view="bear"]').hidden = role !== 'bear';
  $('.settings').hidden = role !== 'bear';
+ for(const entry of menuLinks.querySelectorAll('[data-member-menu]')) entry.hidden = role === 'bear';
+ menuLinks.querySelector('[data-bear-menu]').hidden = role !== 'bear';
  for(const tab of document.querySelectorAll('nav [data-view]')) tab.hidden = role === 'bear' ? tab.dataset.view !== 'bear' : tab.dataset.view === 'bear';
  if(navigationRole !== role) {navigationRole=role;showView(role === 'bear' ? 'bear' : 'home',false);} else showView(activeView,false);
  $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'BearDash member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
@@ -192,7 +198,7 @@ $('#settings-form').addEventListener('submit', async event => {
 });
 document.addEventListener('click', async event => {
  const button = event.target.closest('button'); if(!button) return;
- if(button.dataset.view) showView(button.dataset.view);
+ if(button.dataset.view) { if(accountMenu.open && accountMenu.contains(button)) accountMenu.close(); showView(button.dataset.view); }
  if(button.dataset.action==='setup') {
   if(role === 'bear') { accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');$('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
   else toast('Ask Bear to set his pickup name and contact details.');
