@@ -82,6 +82,57 @@ function emailLink(request) {
   return `mailto:${encodeURIComponent(settings.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 function venmoLink(request) { return `venmo://paycharge?txn=pay&recipients=${encodeURIComponent(settings.venmo)}&amount=5.00&note=${encodeURIComponent(`BearDash pickup: ${request.order} · ${request.name}`)}`; }
+const conversation=document.createElement('dialog');conversation.id='conversation';conversation.setAttribute('aria-labelledby','conversation-title');
+conversation.innerHTML='<div class="section-title"><h2 id="conversation-title">Pickup conversation</h2><button type="button" id="close-conversation">Close ×</button></div><p class="muted">Private to Bear and the requesting member. Updates while this conversation is open; no push notifications.</p><div id="original-note"></div><button type="button" id="older-messages" hidden>Load older messages</button><div id="message-list" aria-label="Messages"></div><p id="message-status" role="status" aria-live="polite"></p><form id="message-form"><label>Your reply<textarea name="body" rows="3" required maxlength="2000" placeholder="Ask about this pickup…"></textarea></label><button type="submit" class="primary">Send reply</button></form>';
+document.body.append(conversation);
+let threadId=null, threadEpoch=0, threadMessages=[], messageLoading=false, sendingMessage=false;
+function messageTime(value) {return new Date(value).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function renderMessages() {
+ const list=$('#message-list');const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<50;
+ list.innerHTML=threadMessages.map(message=>`<article class="message ${message.sender_id===user?.id?'mine':''}"><small>${message.sender_role==='bear'?'Bear':'Member'}${message.sender_id===user?.id?' · You':''} · ${escapeHTML(messageTime(message.created_at))}</small><p>${escapeHTML(message.body)}</p></article>`).join('');
+ if(atBottom) list.scrollTop=list.scrollHeight;
+}
+async function loadMessages(older=false) {
+ if(!threadId || !session || messageLoading) return;
+ const epoch=threadEpoch, auth=authEpoch, id=threadId;messageLoading=true;
+ $('#message-status').textContent=older?'Loading older messages…':'Checking for replies…';
+ try {
+  let query='pickup_messages?select=*&request_id=eq.'+encodeURIComponent(id)+'&order=created_at.desc,id.desc&limit=50';
+  if(older && threadMessages.length) {const first=threadMessages[0];query+='&or='+encodeURIComponent(`(created_at.lt.${first.created_at},and(created_at.eq.${first.created_at},id.lt.${first.id}))`);}
+  const rows=await database(query);
+  if(epoch!==threadEpoch || auth!==authEpoch) return;
+  const merged=new Map(threadMessages.map(message=>[message.id,message]));for(const message of rows) merged.set(message.id,message);
+  threadMessages=[...merged.values()].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
+  renderMessages();
+  if(older || threadMessages.length<=50) $('#older-messages').hidden=rows.length<50;
+  $('#message-status').textContent=threadMessages.length?'Up to date.':'No replies yet. Start the conversation below.';
+ } catch(error) {if(epoch===threadEpoch && auth===authEpoch) $('#message-status').textContent='Could not load messages. If this is the first setup, run the messaging SQL. Otherwise retry after checking your connection.';}
+ finally {if(epoch===threadEpoch) messageLoading=false;}
+}
+function closeConversation() {threadEpoch++;threadId=null;threadMessages=[];messageLoading=false;sendingMessage=false;$('#message-form').reset();$('#message-list').replaceChildren();$('#original-note').replaceChildren();$('#message-form button').disabled=false;$('#message-form button').textContent='Send reply';if(conversation.open) conversation.close();}
+$('#close-conversation').addEventListener('click',closeConversation);
+conversation.addEventListener('cancel',event=>{event.preventDefault();closeConversation();});
+$('#older-messages').addEventListener('click',()=>loadMessages(true));
+function openConversation(id) {
+ const request=requests.find(row=>row.id===id);if(!request || !user || !role) return;
+ closeConversation();threadId=id;
+ $('#conversation-title').textContent='Pickup '+request.order;
+ $('#original-note').innerHTML=`<article class="message original"><small>Original request · ${escapeHTML(request.name)} · ${escapeHTML(messageTime(request.created_at))}</small><p>${escapeHTML(request.notes || 'No note included with the request.')}</p></article>`;
+ $('#older-messages').hidden=true;conversation.showModal();loadMessages();
+}
+$('#message-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(!threadId || !role || sendingMessage) return;
+ const field=event.currentTarget.elements.body, body=field.value.trim();if(!body || body.length>2000) return;
+ const epoch=threadEpoch, auth=authEpoch, id=threadId;const button=$('#message-form button');sendingMessage=true;button.disabled=true;button.textContent='Sending…';
+ try {
+  const rows=await database('pickup_messages',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({request_id:id,body})});
+  if(epoch!==threadEpoch || auth!==authEpoch) return;
+  const merged=new Map(threadMessages.map(message=>[message.id,message]));for(const message of rows) merged.set(message.id,message);
+  threadMessages=[...merged.values()].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));renderMessages();field.value='';$('#message-list').scrollTop=$('#message-list').scrollHeight;$('#message-status').textContent='Reply sent.';
+ } catch(error) {if(epoch===threadEpoch && auth===authEpoch) $('#message-status').textContent='Reply could not be confirmed. Your draft is kept; check for it in the thread before retrying.';}
+ finally {if(epoch===threadEpoch) {sendingMessage=false;button.disabled=false;button.textContent='Send reply';}}
+});
+setInterval(()=>{if(!document.hidden && conversation.open && !sendingMessage) loadMessages();},15000);
 function card(request, bear = false) {
   const statusNames = {pending:'Waiting for Bear',accepted:'Accepted',declined:'Declined',delivered:'Delivered'};
   let actions = '';
@@ -91,6 +142,7 @@ function card(request, bear = false) {
     actions = settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}">Open Venmo app · $5 ↗</a>` : '<button data-action="setup">Set Bear’s Venmo</button>';
     actions += settings.email && settings.bearName ? `<a href="${escapeHTML(emailLink(request))}">Compose store email ↗</a>` : '<button data-action="setup">Set pickup email & name</button>';
   }
+  actions += `<button type="button" data-action="conversation" data-id="${escapeHTML(request.id)}">Conversation ↗</button>`;
   return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear ? '<p>Open Venmo app requires Venmo installed. If it does not open, find @' + escapeHTML(settings.venmo) + ' in Venmo and enter $5 manually. Confirm the recipient before paying. Review and send the authorization from your own email account. These links do not confirm payment or email delivery.</p>' : ''}<div class="actions">${actions}</div></article>`;
 }
 function render() {
@@ -130,6 +182,7 @@ async function sync(manual = false) {
   const [rows,config] = currentRole ? await Promise.all([database('pickup_requests?select=*&order=created_at.desc&limit=500'),database('group_settings?select=*&id=eq.true')]) : [[],[]];
   if(epoch !== authEpoch) return;
   user = currentUser; role = currentRole; requests = rows;
+  if(threadId && !rows.some(row=>row.id===threadId)) closeConversation();
   const nameInput = $('#request-form').elements.name;
   if (!nameInput.value.trim()) nameInput.value = user.user_metadata?.pickup_name || rows.find(r => r.user_id === user.id)?.name || '';
   if(config[0]) settings = config[0];
@@ -139,7 +192,7 @@ async function sync(manual = false) {
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
-  requests = []; role = null; syncError=error.message; render();
+  closeConversation();requests = []; role = null; syncError=error.message; render();
   $('#connection-status').textContent = 'Could not load your account: '+error.message;
   $('#account-status').textContent = 'Account connection failed. See the connection message below, then retry Refresh pickups.';
   toast(error.message);
@@ -170,6 +223,7 @@ async function login(create = false) {
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
 $('#signout').addEventListener('click',()=>{
+ closeConversation();
  const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
  $('#connection-status').textContent='Signed out. Sign in to connect to your playgroup.';
  if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
@@ -207,6 +261,7 @@ $('#settings-form').addEventListener('submit', async event => {
 document.addEventListener('click', async event => {
  const button = event.target.closest('button'); if(!button) return;
  if(button.dataset.view) { if(accountMenu.open && accountMenu.contains(button)) accountMenu.close(); showView(button.dataset.view); }
+ if(button.dataset.action==='conversation') openConversation(button.dataset.id);
  if(button.dataset.action==='setup') {
   if(role === 'bear') { accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');$('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
   else toast('Ask Bear to set his pickup name and contact details.');
