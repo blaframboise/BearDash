@@ -36,3 +36,22 @@ After the original setup has succeeded, run `messages.sql` once in a **new** SQL
 Use **My Pickups → Conversation** or **Bear’s dashboard → Conversation**. Replies refresh every 15 seconds while the conversation is open. Older messages load in pages of 50. There are no email or push alerts for replies yet; app-support email is unrelated. Drafts remain after a failed send but are cleared when the conversation closes or the user signs out.
 
 Live verification after applying SQL: send a message as member A, reply as Bear, and confirm each sees the reply. Repeat on a declined pickup. In a separate member B account, verify A's request/messages cannot be accessed, including direct REST requests with B's session. Verify unsigned users cannot read messages; reject spoofed sender IDs/roles and update/delete attempts. UI checks with simulated responses do not establish that hosted RLS has been applied correctly.
+
+## Member Approvals screen
+
+Run `member-approvals.sql` once **after setup.sql and signup-alerts.sql**. It preserves existing member/Bear roles and the current Gmail notification key. The migration bootstraps the confirmed, existing organizer account `benjamin.laframboise@gmail.com` as an administrator. It rolls back if that account is not already a confirmed member. The result lists the administrator email/access.
+
+Afterward refresh BearDash. The organizer and Bear get **Member Approvals** in the hamburger menu, a pending count on the menu button, and a pending banner. Approvals refresh while the app is open. Approve grants only `member`; Decline leaves the auth account intact without group access, removes it from the list, and prevents further queued alerts. Both actions require confirmation. Simultaneous reviews preserve the first completed decision and never demote existing members. A declined person sees their declined status after refreshing. The original signup email script still works; its older email wording may reference SQL, but reviewers can now use the menu instead.
+
+Administrator membership is separate from delivery roles, so the organizer keeps the member app and Bear keeps the delivery app. Direct browser writes to administrator assignments and group roles remain forbidden. A UI to manage privileged roles, remove existing members, or reopen declined requests is not part of this screen.
+
+Verify on the hosted instance: organizer and Bear see a confirmed pending applicant, ordinary members do not, Approve makes the applicant a member after refresh, Decline gives no access, and the pending count updates. Local database validation does not prove the migration has been installed in your hosted project.
+
+To rerun the isolated PostgreSQL privilege checks (PGlite) without touching a hosted database:
+
+```sh
+npm ci --prefix tests
+npm test --prefix tests
+```
+
+The static app itself still needs no npm installation or build step.

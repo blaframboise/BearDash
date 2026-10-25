@@ -1,0 +1,10 @@
+{
+  "name": "beardash-database-checks",
+  "private": true,
+  "scripts": {
+    "test": "node approvals-db.cjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.11"
+  }
+}

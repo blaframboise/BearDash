@@ -2,6 +2,7 @@
 let requests = [];
 let settings = {venmo:'Kris-Timchuck',email:'gamersgauntletmi@gmail.com',bearName:''};
 let user = null, role = null, loading = false;
+let approvalState={can_approve:false,is_admin:false,own_status:"pending",pending:[]};
 const PROJECT = 'https://bvokijnmogjmftkggbxn.supabase.co';
 const PUBLIC_KEY = 'sb_publishable_h1qDQ4i4AQ2KhY3r7tMROA_3ttUMRqW';
 let session = null;
@@ -53,11 +54,66 @@ const oldColumns=$('#member .columns');const pickupPanel=$('#member-list').paren
 $('#member').hidden=true;$('main').prepend(home);$('main').append(requestScreen);
 $('nav').innerHTML='<button class="active" data-view="home" aria-current="page">Main</button><button data-view="member">My Pickups</button><button data-view="request">Request a Pickup</button><button data-view="bear" hidden>Bear’s dashboard <span id="badge">0</span></button>';
 $('main').prepend($('nav'));
+const approvalsScreen=document.createElement('section');approvalsScreen.id='approvals';approvalsScreen.className='view';approvalsScreen.hidden=true;
+approvalsScreen.innerHTML='<div class="section-title"><div><p class="eyebrow">WELCOME TO BEARDASH</p><h2>Member Approvals</h2></div><button type="button" id="approval-refresh">Refresh</button></div><p class="muted">Approve people you recognize to give them regular member access. Declining does not delete their account or grant access.</p><p id="approval-status" role="status" aria-live="polite"></p><div id="approval-list"></div><div id="review-confirmation" class="panel" hidden><h3 id="review-title"></h3><p id="review-description" class="muted"></p><div class="actions"><button type="button" id="review-confirm">Confirm</button><button type="button" id="review-cancel">Cancel</button></div></div>';
+$('main').append(approvalsScreen);
+const approvalsShortcut=document.createElement('button');approvalsShortcut.type='button';approvalsShortcut.dataset.view='approvals';approvalsShortcut.hidden=true;approvalsShortcut.textContent='Member Approvals';menuLinks.insertBefore(approvalsShortcut,$('#account-shortcut'));
+const approvalNotification=document.createElement('button');approvalNotification.type='button';approvalNotification.id='approval-notification';approvalNotification.dataset.view='approvals';approvalNotification.hidden=true;$('main').insertBefore(approvalNotification,$('main').firstChild);
+let pendingReview=null,reviewing=false,approvalFetching=false;
+function clearApprovals() {approvalState={can_approve:false,is_admin:false,own_status:'pending',pending:[]};pendingReview=null;reviewing=false;$('#review-confirm').disabled=false;$('#review-cancel').disabled=false;$('#review-confirmation').hidden=true;$('#approval-list').replaceChildren();$('#approval-status').textContent='';renderApprovals();}
+function renderApprovals() {
+ const allowed=approvalState.can_approve;
+ approvalsShortcut.hidden=!allowed;
+ const count=approvalState.pending.length;
+ approvalsShortcut.textContent='Member Approvals'+(count?' · '+count:'');
+ approvalNotification.hidden=!allowed || !count;
+ approvalNotification.textContent=count+' member'+(count===1?'':'s')+' awaiting approval →';
+ menuButton.setAttribute('aria-label',allowed && count ? 'Open account menu, '+count+' pending member approvals' : 'Open account menu');
+ if(allowed && count) menuButton.dataset.pending=String(count);else delete menuButton.dataset.pending;
+ $('#approval-list').innerHTML=!allowed ? '<div class="empty">Member approvals are available only to Bear and the app administrator.</div>' : !count ? '<div class="empty">No members awaiting approval.</div>' : approvalState.pending.map(person=>`<article class="card applicant"><div><h3>${escapeHTML(person.email)}</h3><p>Email confirmed · ${escapeHTML(messageTime(person.email_confirmed_at))}</p></div><div class="actions"><button type="button" data-review="approved" data-applicant="${escapeHTML(person.id)}">Approve</button><button type="button" data-review="declined" data-applicant="${escapeHTML(person.id)}">Decline</button></div></article>`).join('');
+ for(const button of $('#approval-list').querySelectorAll('button')) button.disabled=reviewing;
+}
+async function refreshApprovals(manual=false) {
+ if(!session || approvalFetching || reviewing) return;
+ approvalFetching=true;const epoch=authEpoch;$('#approval-refresh').disabled=true;
+ if(manual) $('#approval-status').textContent='Checking for new members…';
+ try {
+  const state=await database('rpc/beardash_approval_state',{method:'POST',body:'{}'});
+  if(epoch!==authEpoch) return;
+  approvalState=state;renderApprovals();
+  if(!state.can_approve && activeView==='approvals') showView(role==='bear'?'bear':'home',false);
+  if(manual) $('#approval-status').textContent='Member list refreshed.';
+ } catch {if(epoch===authEpoch) {clearApprovals();if(activeView==='approvals') showView(role==='bear'?'bear':'home',false);if(manual) $('#approval-status').textContent='Could not load approvals. Check your connection and confirm the member-approvals SQL has been installed.';}}
+ finally {approvalFetching=false;$('#approval-refresh').disabled=false;}
+}
+$('#approval-refresh').addEventListener('click',()=>refreshApprovals(true));
+$('#approval-list').addEventListener('click',event=>{
+ const button=event.target.closest('[data-review]');if(!button || reviewing) return;
+ const applicant=approvalState.pending.find(person=>person.id===button.dataset.applicant);if(!applicant)return;
+ pendingReview={id:applicant.id,decision:button.dataset.review};
+ $('#review-title').textContent=(pendingReview.decision==='approved'?'Approve ':'Decline ')+applicant.email+'?';
+ $('#review-description').textContent=pendingReview.decision==='approved'?'This grants regular BearDash member access to their own pickups and conversations. It does not grant Bear or administrator permissions.':'This account will remain without group access and will leave the pending list. It will not be deleted.';
+ $('#review-confirmation').hidden=false;$('#review-confirm').focus();$('#review-confirmation').scrollIntoView({behavior:'smooth',block:'nearest'});
+});
+$('#review-cancel').addEventListener('click',()=>{pendingReview=null;$('#review-confirmation').hidden=true;});
+$('#review-confirm').addEventListener('click',async()=>{
+ if(!pendingReview || reviewing || !approvalState.can_approve)return;
+ const review={...pendingReview},epoch=authEpoch;reviewing=true;$('#review-confirm').disabled=true;$('#review-cancel').disabled=true;$('#approval-status').textContent='Saving decision…';renderApprovals();
+ try {
+  const result=await database('rpc/beardash_review_member',{method:'POST',body:JSON.stringify({applicant_id:review.id,review_decision:review.decision})});
+  if(epoch!==authEpoch)return;
+  pendingReview=null;$('#review-confirmation').hidden=true;
+  $('#approval-status').textContent=result.result==='approved'?'Member approved. They can refresh BearDash to start using it.':result.result==='declined'?'Request declined. No group access was granted.':'This account has already been reviewed. Refreshing the list.';
+ } catch(error) {if(epoch===authEpoch) $('#approval-status').textContent='Decision could not be confirmed: '+error.message+'. Refresh the list before retrying.';}
+ finally {if(epoch===authEpoch){reviewing=false;$('#review-confirm').disabled=false;$('#review-cancel').disabled=false;await refreshApprovals();}}
+});
+setInterval(()=>{if(!document.hidden && session && approvalState.can_approve) refreshApprovals();},15000);
 let activeView='home', navigationRole;
 function showView(id, scroll=true) {
- if(role==='bear') id='bear';
+ if(id==='approvals' && !approvalState.can_approve) return;
+ if(role==='bear' && id!=='approvals') id='bear';
  else if(id==='bear') id='home';
- if(!['home','member','request','bear'].includes(id)) return;
+ if(!['home','member','request','bear','approvals'].includes(id)) return;
  activeView=id;
  for(const view of document.querySelectorAll('main > .view')) view.hidden=view.id!==id;
  for(const tab of document.querySelectorAll('nav [data-view]')) {tab.classList.toggle('active',tab.dataset.view===id);if(tab.dataset.view===id)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}
@@ -167,8 +223,9 @@ function accountUI() {
  for(const entry of menuLinks.querySelectorAll('[data-member-menu]')) entry.hidden = role === 'bear';
  menuLinks.querySelector('[data-bear-menu]').hidden = role !== 'bear';
  for(const tab of document.querySelectorAll('nav [data-view]')) tab.hidden = role === 'bear' ? tab.dataset.view !== 'bear' : tab.dataset.view === 'bear';
+ if(activeView==='approvals' && !approvalState.can_approve) activeView=role==='bear'?'bear':'home';
  if(navigationRole !== role) {navigationRole=role;showView(role === 'bear' ? 'bear' : 'home',false);} else showView(activeView,false);
- $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? 'BearDash member' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
+ $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? (approvalState.is_admin ? 'BearDash administrator' : 'BearDash member') : approvalState.own_status==='declined' ? 'Your membership request was declined. Contact BearDash support if this was unexpected.' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
 }
 async function sync(manual = false) {
  if (loading || !session) return;
@@ -188,11 +245,13 @@ async function sync(manual = false) {
   if(config[0]) settings = config[0];
   for (const field of ['venmo','email','bearName']) $('#settings-form').elements[field].value = settings[field] || '';
   $('#connection-status').textContent = role ? 'CONNECTED · Updates refresh every 15 seconds while this page is open. Up to 500 recent requests shown.' : 'ACCOUNT CONNECTED · Group approval is required.';
+  await refreshApprovals();
+  if(epoch!==authEpoch)return;
   render();
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
-  closeConversation();requests = []; role = null; syncError=error.message; render();
+  closeConversation();clearApprovals();requests = []; role = null; syncError=error.message; render();
   $('#connection-status').textContent = 'Could not load your account: '+error.message;
   $('#account-status').textContent = 'Account connection failed. See the connection message below, then retry Refresh pickups.';
   toast(error.message);
@@ -223,7 +282,7 @@ async function login(create = false) {
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
 $('#signout').addEventListener('click',()=>{
- closeConversation();
+ closeConversation();clearApprovals();
  const token = session?.access_token; authEpoch++; loading=false; storeSession(null); user=null; role=null; requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
  $('#connection-status').textContent='Signed out. Sign in to connect to your playgroup.';
  if(token) api('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
