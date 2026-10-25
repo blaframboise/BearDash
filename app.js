@@ -9,7 +9,7 @@ try { session = JSON.parse(sessionStorage.getItem('beardash.auth')); } catch {}
 let authEpoch = 0, refreshPromise;
 function storeSession(value) { session = value; try { if(value) sessionStorage.setItem('beardash.auth',JSON.stringify(value)); else sessionStorage.removeItem('beardash.auth'); } catch {} }
 async function api(path, options = {}, token = session?.access_token) {
- const response = await fetch(PROJECT + path, {...options,cache:'no-store',headers:{apikey:PUBLIC_KEY,...(token ? {Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json',...options.headers}});
+ const response = await fetch(PROJECT + path, {...options,signal:options.signal || AbortSignal.timeout(20000),cache:'no-store',headers:{apikey:PUBLIC_KEY,...(token ? {Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json',...options.headers}});
  const data = await response.json().catch(()=>null);
  if (!response.ok) throw new Error(data?.msg || data?.error_description || data?.message || `Connection failed (${response.status})`);
  return data;
@@ -120,7 +120,7 @@ function accountUI() {
 }
 async function sync(manual = false) {
  if (loading || !session) return;
- const epoch = authEpoch; loading = true; accountUI();
+ const epoch = authEpoch; let syncError=null; loading = true; accountUI();
  $('#refresh').disabled = true; $('#refresh').textContent = 'Refreshing…';
  try {
   const token = await readyToken();
@@ -139,24 +139,32 @@ async function sync(manual = false) {
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
-  requests = []; role = null; render();
-  $('#connection-status').textContent = 'Connection unavailable. Check your connection or sign out and back in. If setup is new, the organizer must run the database setup.';
+  requests = []; role = null; syncError=error.message; render();
+  $('#connection-status').textContent = 'Could not load your account: '+error.message;
+  $('#account-status').textContent = 'Account connection failed. See the connection message below, then retry Refresh pickups.';
   toast(error.message);
- } finally { if(epoch === authEpoch) { loading = false; accountUI(); $('#refresh').disabled = false; $('#refresh').textContent = 'Refresh pickups'; } }
+ } finally { if(epoch === authEpoch) { loading = false; accountUI(); if(syncError) $('#account-status').textContent='Could not load your account: '+syncError; $('#refresh').disabled = false; $('#refresh').textContent = 'Refresh pickups'; } }
 }
 async function login(create = false) {
  if(loading) return;
- const form = $('#auth-form'); if(!form.reportValidity()) return;
+ const form = $('#auth-form');
+ const status = $('#account-status');
+ if(!form.reportValidity()) {status.textContent='Enter a valid email and a password of at least 8 characters.';return;}
+ status.textContent = create ? 'Creating your account…' : 'Signing in…';
  const data = new FormData(form); loading = true;
  const buttons = [...form.querySelectorAll('button')]; buttons.forEach(b=>b.disabled=true);
+ const signInButton=form.querySelector('[type=submit]');signInButton.textContent=create ? 'Creating account…' : 'Signing in…';
  try {
   const credentials = {email:data.get('email').trim(),password:data.get('password')};
   const redirect = location.origin+location.pathname;
   const result = await api(create ? '/auth/v1/signup?redirect_to='+encodeURIComponent(redirect) : '/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify(credentials)},null);
   if (result.access_token) { authEpoch++; storeSession({...result,expires_at:Math.floor(Date.now()/1000)+result.expires_in}); user = result.user; form.reset(); }
   else { $('#account-status').textContent = 'Check your email for the confirmation link, then return here to sign in. If no email arrives, contact the organizer.'; toast('Check your email to confirm your account.'); }
- } catch(error) { toast(error.message); }
- finally { loading = false; buttons.forEach(b=>b.disabled=false); }
+ } catch(error) {
+  const message = error.name === 'TimeoutError' ? 'Sign-in timed out. Check your connection and try again.' : error.message;
+  status.textContent='Could not sign in: '+message; toast(message);
+ }
+ finally { loading = false; buttons.forEach(b=>b.disabled=false);signInButton.textContent='Sign in'; }
  if(session) { await sync(); if(role && accountMenu.open) accountMenu.close(); }
 }
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
