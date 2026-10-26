@@ -125,9 +125,9 @@ let activeView='home', navigationRole;
 function showView(id, scroll=true) {
  if(id==='approvals' && !approvalState.can_approve) return;
  if(['schedule','refunds'].includes(id) && role!=='bear') return;
- if(role==='bear' && !['approvals','bearmail','schedule','refunds'].includes(id)) id='bear';
+ if(role==='bear' && !['approvals','bearmail','schedule','refunds','previous'].includes(id)) id='bear';
  else if(id==='bear') id='home';
- if(!['home','member','request','bear','approvals','bearmail','schedule','refunds'].includes(id)) return;
+ if(!['home','member','request','bear','approvals','bearmail','schedule','refunds','previous'].includes(id)) return;
  activeView=id;
  for(const view of document.querySelectorAll('main > .view')) view.hidden=view.id!==id;
  for(const tab of document.querySelectorAll('nav [data-view]')) {tab.classList.toggle('active',tab.dataset.view===id);if(tab.dataset.view===id)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}

@@ -13,13 +13,16 @@ window.BearDashDelivery = (() => {
   scheduleScreen.innerHTML='<div class="section-title"><h2>Pickup Schedule</h2><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">One $5 fee per member per run. Accept or decline pending orders before marking a run Picked Up. Canceling a run sends BearMail and offers affected members a refund or reschedule.</p><div id="schedule-list"></div>';
   const refundsScreen=document.createElement('section');refundsScreen.id='refunds';refundsScreen.className='view';refundsScreen.hidden=true;
   refundsScreen.innerHTML='<div class="section-title"><h2>Refund Requests</h2><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">Check the original payment and recipient in Venmo before returning $5. Opening Venmo does not mark a refund sent.</p><div id="refund-list"></div>';
-  main.append(mailScreen,scheduleScreen,refundsScreen);
+  const previousScreen=document.createElement('section');previousScreen.id='previous';previousScreen.className='view';previousScreen.hidden=true;
+  previousScreen.innerHTML='<div class="section-title"><div><p class="eyebrow">YOUR DELIVERY HISTORY</p><h2>Previous Orders</h2></div><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">Delivered orders move here the day after their scheduled pickup date, using Michigan time. Conversations stay available. Orders that still need action remain in your current list.</p><div id="previous-list"></div>';
+  main.append(mailScreen,scheduleScreen,refundsScreen,previousScreen);
+  const previousLink=document.createElement('button');previousLink.type='button';previousLink.dataset.view='previous';previousLink.textContent='Previous Orders';document.querySelector('#member .section-title').append(previousLink);
   const shortcuts={};
-  for(const [id,label] of [['bearmail','BearMail'],['schedule','Pickup Schedule'],['refunds','Refund Requests']]) {
+  for(const [id,label] of [['previous','Previous Orders'],['bearmail','BearMail'],['schedule','Pickup Schedule'],['refunds','Refund Requests']]) {
     const button=document.createElement('button');button.type='button';button.dataset.view=id;button.hidden=true;button.textContent=label;
     menuLinks.insertBefore(button,document.querySelector('#account-shortcut'));shortcuts[id]=button;
   }
-  const bearTools=document.createElement('div');bearTools.className='actions bear-tools';bearTools.innerHTML='<button type="button" data-view="schedule">Pickup Schedule / Picked Up</button><button type="button" data-view="refunds">Refund Requests</button><button type="button" data-view="bearmail">BearMail</button>';
+  const bearTools=document.createElement('div');bearTools.className='actions bear-tools';bearTools.innerHTML='<button type="button" data-view="schedule">Pickup Schedule / Picked Up</button><button type="button" data-view="refunds">Refund Requests</button><button type="button" data-view="bearmail">BearMail</button><button type="button" data-view="previous">Previous Orders</button>';
   document.querySelector('#bear').insertBefore(bearTools,document.querySelector('#bear-list'));
   const quote=document.createElement('div');quote.id='run-quote';quote.className='note';quote.setAttribute('aria-live','polite');
   document.querySelector('#request-form fieldset').insertBefore(quote,document.querySelector('#request-form .primary'));
@@ -36,6 +39,8 @@ window.BearDashDelivery = (() => {
     const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Detroit',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
     const p=type=>parts.find(part=>part.type===type).value;return `${p('year')}-${p('month')}-${p('day')}`;
   };
+  function isPrevious(order){return order.status==='delivered' && order.date<today();}
+  function currentBooking(booking){const orders=ordersFor(booking.id);return !orders.length || orders.some(order=>!isPrevious(order)) || ['needs_choice','refund_requested'].includes(booking.state);}
   function nextRuns(){return state.runs.filter(run=>run.day>=today()).sort((a,b)=>a.day.localeCompare(b.day));}
   function openDays(){return nextRuns().filter(run=>run.status==='open');}
   function feeLink(booking,refund=false){
@@ -50,7 +55,7 @@ window.BearDashDelivery = (() => {
     document.querySelector('#mail-compose').reset();document.querySelector('#mail-compose-status').textContent='';
     document.querySelector('#delivery-action-confirm').disabled=false;document.querySelector('#delivery-action-cancel').disabled=false;
     document.querySelector('#booking-choice-form button').disabled=false;
-    for(const node of ['#mail-list','#schedule-list','#refund-list'])document.querySelector(node).replaceChildren();
+    for(const node of ['#mail-list','#schedule-list','#refund-list','#previous-list'])document.querySelector(node).replaceChildren();
     render();
   }
   async function refresh(){
@@ -84,7 +89,7 @@ window.BearDashDelivery = (() => {
     else quote.textContent=`${closed?`Bear has already picked up for ${runDate(closed.day)}. `:''}Pickup: ${runDate(date)}. This is a separate $5 run. More orders can be added for no extra fee until Bear marks this run Picked Up.`;
   }
   function renderBooking(booking,bear=false){
-    const orders=ordersFor(booking.id);const run=runFor(booking.run_day);let controls='';
+    const orders=ordersFor(booking.id).filter(order=>!isPrevious(order));const run=runFor(booking.run_day);let controls='';
     const hasAccepted=orders.some(order=>['accepted','picked_up','delivered'].includes(order.status));
     if(!bear && booking.state==='active' && hasAccepted){
       if(booking.payment_status==='unconfirmed')controls=`<a href="${escape(feeLink(booking))}">Open Venmo app · $5 ↗</a><button type="button" data-delivery-action="report-paid" data-booking="${booking.id}">I sent the $5</button>`;
@@ -94,10 +99,10 @@ window.BearDashDelivery = (() => {
     if(!bear && booking.state==='needs_choice')controls+=`<button type="button" data-delivery-action="choose" data-booking="${booking.id}">Refund or choose another date</button>`;
     if(!bear && booking.state==='active' && run?.status==='open')controls+=`<button type="button" data-delivery-action="add-order" data-booking="${booking.id}">Add another order · no extra fee</button>`;
     const stateLabels={active:'$5 total for this member’s run',needs_choice:'Action needed: refund or reschedule',rescheduled:'Rescheduled / combined with another run',refund_requested:'$5 refund requested',refunded:'Bear marked $5 refund sent',cancelled_unpaid:'Cancelled—no payment reported'};
-    return `<section class="run-booking"><div class="section-title"><div><p class="eyebrow">${bear?escape(memberName(booking)):'YOUR RUN'}</p><h3>${escape(runDate(booking.run_day))}</h3></div><span class="status">${escape(run?.status==='picked_up'?'Picked up':run?.status || '')}</span></div><p class="run-fee">${escape(stateLabels[booking.state] || booking.state)}</p>${booking.state==='needs_choice'?`<p class="attention-copy">Bear cannot deliver as originally expected. Would you like to request your $5 back and arrange another pickup, or choose another date? If you haven’t paid, cancel without a refund.</p>`:''}${booking.state==='refund_requested'?`<p class="muted">Refund destination: @${escape(booking.refund_venmo)}. Awaiting Bear’s manual transfer.</p>`:''}${booking.state==='refunded'?'<p class="muted">Check Venmo for the refund. BearDash does not verify the transfer.</p>':''}<div class="actions booking-actions">${controls}</div>${!bear && booking.state==='active' && hasAccepted?'<p class="muted">Pay once for this run, not once per order. Venmo requires the app; if needed, find @'+escape(settings.venmo)+' and pay $5 manually. Confirm the recipient. Payment reports are not automated verification.</p>':''}<div class="booking-orders">${orders.length?orders.map(order=>card(order,bear)).join(''):'<p class="muted">The orders in this booking moved to another run. Their conversations stay with the orders.</p>'}</div></section>`;
+    return `<section class="run-booking"><div class="section-title"><div><p class="eyebrow">${bear?escape(memberName(booking)):'YOUR RUN'}</p><h3>${escape(runDate(booking.run_day))}</h3></div><span class="status">${escape(run?.status==='picked_up'?'Picked up':run?.status || '')}</span></div><p class="run-fee">${escape(stateLabels[booking.state] || booking.state)}</p>${booking.state==='needs_choice'?`<p class="attention-copy">Bear cannot deliver as originally expected. Would you like to request your $5 back and arrange another pickup, or choose another date? If you haven’t paid, cancel without a refund.</p>`:''}${booking.state==='refund_requested'?`<p class="muted">Refund destination: @${escape(booking.refund_venmo)}. Awaiting Bear’s manual transfer.</p>`:''}${booking.state==='refunded'?'<p class="muted">Check Venmo for the refund. BearDash does not verify the transfer.</p>':''}<div class="actions booking-actions">${controls}</div>${!bear && booking.state==='active' && hasAccepted?'<p class="muted">Pay once for this run, not once per order. Venmo requires the app; if needed, find @'+escape(settings.venmo)+' and pay $5 manually. Confirm the recipient. Payment reports are not automated verification.</p>':''}<div class="booking-orders">${orders.length?orders.map(order=>card(order,bear)).join(''):'<p class="muted">No current orders in this booking. Moved orders stay with their new run; completed deliveries are in Previous Orders.</p>'}</div></section>`;
   }
   function render(){
-    for(const [id,button]of Object.entries(shortcuts))button.hidden=!role || (id!=='bearmail' && role!=='bear');
+    for(const [id,button]of Object.entries(shortcuts))button.hidden=!role || (!['bearmail','previous'].includes(id) && role!=='bear');
     bearTools.hidden=role!=='bear';
     const unread=state.mail.filter(mail=>!mail.is_read).length;
     shortcuts.bearmail.textContent='BearMail'+(unread?' · '+unread:'');
@@ -107,16 +112,22 @@ window.BearDashDelivery = (() => {
     shortcuts.refunds.textContent='Refund Requests'+(state.bookings.some(booking=>booking.state==='refund_requested')?' · pending':'');
     document.querySelector('#mail-compose').hidden=role!=='bear';
     if(!role){banner.replaceChildren();delete menuButton.dataset.mailCount;return;}
-    if(!ready){banner.innerHTML='<div class="delivery-warning">The pickup schedule is temporarily unavailable. Refresh or check your connection. New requests and run payment controls are paused until it reconnects.</div>';for(const id of ['#mail-list','#schedule-list','#refund-list'])document.querySelector(id).innerHTML='<div class="empty">Temporarily unavailable. Please refresh to reconnect.</div>';updateQuote();return;}
+    if(!ready){banner.innerHTML='<div class="delivery-warning">The pickup schedule is temporarily unavailable. Refresh or check your connection. New requests and run payment controls are paused until it reconnects.</div>';for(const id of ['#mail-list','#schedule-list','#refund-list','#previous-list'])document.querySelector(id).innerHTML='<div class="empty">Temporarily unavailable. Please refresh to reconnect.</div>';updateQuote();return;}
     const cancelled=nextRuns().filter(run=>run.status==='cancelled');
     banner.innerHTML=cancelled.map(run=>`<div class="delivery-warning"><strong>ATTENTION: NO BEARDASH AVAILABLE ON ${escape(runDate(run.day).toUpperCase())}.</strong>${run.reason?'<p>'+escape(run.reason)+'</p>':''}<button type="button" data-view="bearmail">Read BearMail</button></div>`).join('');
     optionsFor(document.querySelector('#dates'),true);updateQuote();
     if(role!=='bear'){
       const bookings=state.bookings.filter(booking=>booking.user_id===user?.id);
-      document.querySelector('#member-list').innerHTML=bookings.length?bookings.map(booking=>renderBooking(booking)).join(''):'<div class="empty">No pickups yet. Request your first run.</div>';
+      const current=bookings.filter(currentBooking);
+      document.querySelector('#member-list').innerHTML=current.length?current.map(booking=>renderBooking(booking)).join(''):'<div class="empty">No current pickups. Completed deliveries are in Previous Orders.</div>';
+      const activeCount=requests.filter(order=>order.user_id===user?.id && !isPrevious(order)).length;document.querySelector('#count').textContent=activeCount+' current order'+(activeCount===1?'':'s');
     }else{
-      document.querySelector('#bear-list').innerHTML=state.bookings.length?state.bookings.map(booking=>renderBooking(booking,true)).join(''):'<div class="empty">No pickups yet.</div>';
+      const current=state.bookings.filter(currentBooking);
+      document.querySelector('#bear-list').innerHTML=current.length?current.map(booking=>renderBooking(booking,true)).join(''):'<div class="empty">No current pickups. Completed deliveries are in Previous Orders.</div>';
     }
+    const previousBookings=state.bookings.filter(booking=>(role==='bear' || booking.user_id===user?.id) && ordersFor(booking.id).some(isPrevious));
+    previousBookings.sort((a,b)=>b.run_day.localeCompare(a.run_day));
+    document.querySelector('#previous-list').innerHTML=previousBookings.length?previousBookings.map(booking=>`<section class="run-booking"><p class="eyebrow">${role==='bear'?escape(memberName(booking)):'COMPLETED DELIVERY'}</p><h3>${escape(runDate(booking.run_day))}</h3><div class="booking-orders">${ordersFor(booking.id).filter(isPrevious).map(order=>card(order,role==='bear')).join('')}</div></section>`).join(''):'<div class="empty">No previous orders yet. Delivered orders appear here after their scheduled date ends.</div>';
     document.querySelector('#mail-list').innerHTML=state.mail.length?state.mail.map(mail=>`<article class="card mail-card ${mail.is_read?'':'unread'}"><div class="section-title"><h3>${escape(mail.title)}</h3><span class="count">${mail.is_read?'Read':'Unread'}</span></div><small class="muted">${escape(messageTime(mail.created_at))}${mail.recipient_id?' · Pickup notice':' · All members'}</small><p>${escape(mail.body)}</p>${mail.is_read?'':`<button type="button" data-delivery-action="read-mail" data-mail="${mail.id}">Mark read</button>`}${mail.kind==='needs_choice' && role!=='bear'?'<button type="button" data-view="member">My Pickups →</button>':''}</article>`).join(''):'<div class="empty">No BearMail yet.</div>';
     if(role==='bear')renderBear();
     if(!loading)fieldset.disabled=role==='bear' || !document.querySelector('#dates').value;

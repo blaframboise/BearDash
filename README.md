@@ -33,3 +33,7 @@ Members have Main, My Pickups, and Request a Pickup screens. Main includes order
 ## Delivery runs, cancellations, BearMail, and refunds
 
 This update adds one $5 booking per member/run (including extra orders), Bear's Picked Up cutoff, date availability, cancellation banners, BearMail, member rescheduling/refund choices, and manual Venmo refund controls. **Activate it by running [delivery-runs.sql](supabase/delivery-runs.sql) once.** Follow the [activation and validation guide](supabase/DELIVERY-RUNS.md). Existing pickups/conversations stay intact; historical payments are not assumed verified. Payments/refunds remain manual Venmo transactions. BearMail has in-app unread indicators, not background phone notifications. Gamer's Gauntlet accepts the authorization email process, as confirmed by the organizer.
+
+## Previous Orders
+
+Delivered orders move out of the current member and Bear lists the day after their scheduled date in America/Detroit. Previous Orders is available from the hamburger menu, the member pickup screen, and Bear’s dashboard. Partially completed runs keep unfinished orders visible. History preserves conversations and does not show payment or delivery controls. This is a read-only display filter, not deletion or a database migration. Future-dated test deliveries remain current until their scheduled date passes.

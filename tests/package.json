@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "test": "node approvals-db.cjs && node delivery-db.cjs",
-    "test:browser": "node delivery-browser.cjs"
+    "test:browser": "node delivery-browser.cjs && node previous-orders-browser.cjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.11",
