@@ -10,7 +10,7 @@ The project URL and publishable key in app.js are intentionally public browser c
 
 Members request pickups, Bear accepts/declines/marks delivery, and accepted requests unlock a $5 Venmo link and prewritten store authorization email. Users must review and send both; links do not verify payment or email delivery. Bear sets his recognized pickup name in Playgroup setup. Confirm the store permits third-party pickup.
 
-Requests refresh every 15 seconds while the page is open, or manually with Refresh pickups. No background notifications are configured. Old local-preview requests are not imported. Account sessions are remembered in localStorage and refreshed automatically; sign-out clears local/session storage and displayed records. Only static app assets are cached offline; shared requests require network access.
+Requests refresh every 15 seconds while the page is open, or manually with Refresh pickups. Background alerts for Bear require the separate push activation steps below. Old local-preview requests are not imported. Account sessions are remembered in localStorage and refreshed automatically; sign-out clears local/session storage and displayed records. Only static app assets are cached offline; shared requests require network access.
 
 ## Local development
 
@@ -37,3 +37,7 @@ This update adds one $5 booking per member/run (including extra orders), Bear's 
 ## Previous Orders
 
 Delivered orders move out of the current member and Bear lists the day after their scheduled date in America/Detroit. Previous Orders is available from the hamburger menu, the member pickup screen, and Bear’s dashboard. Partially completed runs keep unfinished orders visible. History preserves conversations and does not show payment or delivery controls. This is a read-only display filter, not deletion or a database migration. Future-dated test deliveries remain current until their scheduled date passes.
+
+## Background notifications for Bear
+
+Push alerts for new orders, member replies, and refund requests are implemented but require [the push activation steps](supabase/PUSH-NOTIFICATIONS.md): a new SQL migration, one Supabase Edge Function, administrator initialization, a scheduler, and Bear's explicit device permission. No Resend/domain or manual VAPID-key copying is required. The dashboard still works independently. Ordinary members do not receive these push alerts. Live iPhone delivery must be tested after deployment; local tests alone do not establish readiness.

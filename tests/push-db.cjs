@@ -1,0 +1,41 @@
+const {PGlite}=require('@electric-sql/pglite');const webpush=require('web-push');const crypto=require('node:crypto');const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{const db=new PGlite();try{
+ await db.exec(`create role anon;create role authenticated;create role service_role;create schema auth;create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,created_at timestamptz default now());create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;grant usage on schema auth to authenticated,anon;grant execute on function auth.uid() to authenticated,anon;`);
+ const ids=Array.from({length:5},(_,i)=>`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`);
+ for(let i=0;i<ids.length;i++)await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,now())',[ids[i],i===0?'benjamin.laframboise@gmail.com':`test${i}@example.com`]);
+ for(const file of ['setup.sql','messages.sql','signup-alerts.sql'])await db.exec(fs.readFileSync(path.join(__dirname,'../supabase',file),'utf8'));
+ await db.query("insert into public.group_members(user_id,role) values($1,'member'),($2,'bear'),($3,'member'),($4,'bear')",[ids[0],ids[1],ids[2],ids[4]]);
+ for(const file of ['member-approvals.sql','delivery-runs.sql','push-notifications.sql'])await db.exec(fs.readFileSync(path.join(__dirname,'../supabase',file),'utf8'));
+ async function as(i,sql,args=[],service=false){await db.exec('set role '+(service?'service_role':i===null?'anon':'authenticated'));await db.query("select set_config('request.jwt.claim.sub',$1,false)",[i===null?'':ids[i]]);try{return await db.query(sql,args);}finally{await db.exec('reset role');}}
+ const rpc=async(i,name,args=[],service=false)=>(await as(i,`select public.${name}(${args.map((_,j)=>'$'+(j+1)).join(',')}) as r`,args,service)).rows[0].r;
+ const worker=(name,args=[])=>rpc(null,name,args,true);
+ const query=async(sql,args=[]) => (await db.query(sql,args)).rows;
+ const keys=webpush.generateVAPIDKeys();const ecdh=crypto.createECDH('prime256v1');ecdh.generateKeys();const p256=ecdh.getPublicKey().toString('base64url'),auth=crypto.randomBytes(16).toString('base64url');const a='https://web.push.apple.com/test-device-a',b='https://fcm.googleapis.com/fcm/send/test-device-b';
+ assert.equal((await rpc(1,'beardash_push_public_config')).configured,false);
+ await assert.rejects(()=>rpc(1,'beardash_push_subscribe',[a,p256,auth]),/initialize/);
+ await assert.rejects(()=>rpc(1,'beardash_push_bootstrap',[keys.publicKey,keys.privateKey]),/permission denied/);
+ assert.equal(await worker('beardash_push_bootstrap',[keys.publicKey,keys.privateKey]),keys.publicKey);
+ const changed=webpush.generateVAPIDKeys();assert.equal(await worker('beardash_push_bootstrap',[changed.publicKey,changed.privateKey]),keys.publicKey);
+ const publicConfig=await rpc(1,'beardash_push_public_config');assert.equal(publicConfig.public_key,keys.publicKey);assert.equal('private_key' in publicConfig,false);assert.equal('dispatch_secret' in publicConfig,false);
+ await assert.rejects(()=>rpc(2,'beardash_push_subscribe',[a,p256,auth]),/Only Bear/);await assert.rejects(()=>rpc(0,'beardash_push_subscribe',[a,p256,auth]),/Only Bear/);await assert.rejects(()=>rpc(3,'beardash_push_public_config'),/required/);
+ await assert.rejects(()=>rpc(1,'beardash_push_subscribe',['https://127.0.0.1/secret',p256,auth]),/check constraint/);await assert.rejects(()=>rpc(1,'beardash_push_subscribe',['https://web.push.apple.com.evil.test/secret',p256,auth]),/check constraint/);
+ const sa=await rpc(1,'beardash_push_subscribe',[a,p256,auth]);assert.equal(await rpc(1,'beardash_push_subscribe',[a,p256,auth]),sa);await rpc(4,'beardash_push_subscribe',[b,p256,auth]);
+ await assert.rejects(()=>as(2,'select * from beardash_push.subscriptions'),/permission denied/);await assert.rejects(()=>rpc(1,'beardash_push_claim',[20]),/permission denied/);await assert.rejects(()=>rpc(2,'beardash_push_worker_config'),/permission denied/);
+ const day=(await query("select g::date::text as day from generate_series(((now() at time zone 'America/Detroit')::date+1)::timestamp,((now() at time zone 'America/Detroit')::date+7)::timestamp,interval '1 day') g where extract(isodow from g) in (1,5) order by g limit 1"))[0].day;
+ const order=await rpc(2,'beardash_submit_order',[crypto.randomUUID(),day,'Member','PUSH-TEST','note']);
+ assert.equal((await query("select count(*)::int as n from beardash_push.jobs where kind='new_order'"))[0].n,2);
+ await as(1,'insert into public.pickup_messages(request_id,body) values($1,$2)',[order.request_id,'Bear reply']);assert.equal((await query("select count(*)::int as n from beardash_push.jobs where kind='member_reply'"))[0].n,0);
+ await as(2,'insert into public.pickup_messages(request_id,body) values($1,$2)',[order.request_id,'Member reply']);assert.equal((await query("select count(*)::int as n from beardash_push.jobs where kind='member_reply'"))[0].n,2);
+ await rpc(1,'beardash_order_status',[order.request_id,'accepted']);await rpc(2,'beardash_payment',[order.booking_id,'report_paid',false]);await rpc(1,'beardash_schedule_run',[day,false,1,'Unavailable']);await rpc(2,'beardash_resolve_booking',[order.booking_id,'refund',null,'Member',true]);assert.equal((await query("select count(*)::int as n from beardash_push.jobs where kind='refund_request'"))[0].n,2);
+ const claimed=await worker('beardash_push_claim',[20]);assert.equal(claimed.length,6);assert.equal((await worker('beardash_push_claim',[20])).length,0);
+ const retry=claimed.find(j=>j.endpoint===a);await worker('beardash_push_finish',[retry.id,retry.lease_id,false,503,60]);assert.equal((await worker('beardash_push_claim',[20])).length,0);await db.query("update beardash_push.jobs set available_at=now()-interval '1 second' where id=$1",[retry.id]);const second=(await worker('beardash_push_claim',[20]))[0];assert.equal(second.id,retry.id);assert.notEqual(second.lease_id,retry.lease_id);await worker('beardash_push_finish',[retry.id,retry.lease_id,true,201,60]);assert.equal((await query('select completed_at from beardash_push.jobs where id=$1',[retry.id]))[0].completed_at,null);await worker('beardash_push_finish',[second.id,second.lease_id,true,201,60]);assert.equal((await query('select outcome from beardash_push.jobs where id=$1',[retry.id]))[0].outcome,'sent');
+ const gone=claimed.find(j=>j.endpoint===b);await worker('beardash_push_finish',[gone.id,gone.lease_id,false,410,60]);assert.equal(await rpc(4,'beardash_push_subscription',[b]),false);
+ await rpc(2,'beardash_push_unsubscribe',[a]);assert.equal(await rpc(1,'beardash_push_subscription',[a]),true);
+ await rpc(1,'beardash_push_test');assert.equal((await query("select count(*)::int as n from beardash_push.jobs where kind='test'"))[0].n,1);
+ await db.query("update public.group_members set role='member' where user_id=$1",[ids[1]]);await worker('beardash_push_claim',[20]);assert.equal((await query('select count(*)::int as n from beardash_push.jobs where completed_at is null')).at(0).n,0);
+ await rpc(1,'beardash_push_unsubscribe',[a]);assert.equal((await query('select enabled from beardash_push.subscriptions where id=$1',[sa]))[0].enabled,false);
+ await db.query("update public.group_members set role='bear' where user_id=$1",[ids[1]]);await rpc(1,'beardash_push_subscribe',[a,p256,auth]);await rpc(1,'beardash_push_test');await db.exec("update beardash_push.jobs set attempts=5,locked_until=now()-interval '1 second' where completed_at is null");assert.equal((await worker('beardash_push_claim',[20])).length,0);assert.equal((await query("select count(*)::int as n from beardash_push.jobs where completed_at is null"))[0].n,0);
+ await assert.rejects(()=>rpc(null,'beardash_push_public_config'),/permission denied/);
+ console.log('PASS PostgreSQL push: key privacy/idempotency, Bear-only devices, endpoint restrictions, order/reply/refund triggers, no Bear-self-reply alert, per-device jobs, lease/retry/stale-ack handling, expired endpoints, owner-only disable, role revocation, private tables/service RPCs.');
+ }finally{await db.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -2,11 +2,12 @@
   "name": "beardash-database-checks",
   "private": true,
   "scripts": {
-    "test": "node approvals-db.cjs && node delivery-db.cjs",
-    "test:browser": "node delivery-browser.cjs && node previous-orders-browser.cjs"
+    "test": "node approvals-db.cjs && node delivery-db.cjs && node push-db.cjs && node push-worker.cjs && node push-service-worker.cjs",
+    "test:browser": "node delivery-browser.cjs && node previous-orders-browser.cjs && node push-browser.cjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.11",
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "web-push": "3.6.7"
   }
 }

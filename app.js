@@ -241,6 +241,7 @@ function accountUI() {
  if(activeView==='approvals' && !approvalState.can_approve) activeView=role==='bear'?'bear':'home';
  if(navigationRole !== role) {navigationRole=role;showView(role === 'bear' ? 'bear' : 'home',false);} else showView(activeView,false);
  $('#account-status').textContent = user ? `${user.email} · ${role === 'bear' ? 'Bear’s account' : role ? (approvalState.is_admin ? 'BearDash administrator' : 'BearDash member') : approvalState.own_status==='declined' ? 'Your membership request was declined. Contact BearDash support if this was unexpected.' : 'Awaiting group approval. Ask the organizer to approve your account.'}` : 'Sign in or create an account. New accounts need group approval.';
+ window.BearDashPush?.render();
 }
 async function sync(manual = false) {
  if (loading || !session) return;
@@ -265,6 +266,7 @@ async function sync(manual = false) {
   await window.BearDashDelivery?.refresh();
   if(epoch!==authEpoch)return;
   render();
+  window.BearDashPush?.refresh().catch(()=>{});
   if (manual) toast('Pickups refreshed.');
  } catch(error) {
   if(epoch !== authEpoch) return;
@@ -300,6 +302,7 @@ async function login(create = false) {
 $('#auth-form').addEventListener('submit',event=>{event.preventDefault();login();});
 $('#signup').addEventListener('click',()=>login(true));
 function endSession() {
+ window.BearDashPush?.signOut(session?.access_token).catch(()=>{});
  closeConversation();clearApprovals();window.BearDashDelivery?.reset();
  authEpoch++;loading=false;storeSession(null);user=null;role=null;requests=[];$('#request-form').reset();render();accountUI();$('#refresh').disabled=false;$('#refresh').textContent='Refresh pickups';
  $('#connection-status').textContent='Signed out. Sign in to connect to BearDash.';
