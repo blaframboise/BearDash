@@ -36,8 +36,12 @@ This update adds one $5 booking per member/run (including extra orders), Bear's 
 
 ## Previous Orders
 
-Delivered orders move out of the current member and Bear lists the day after their scheduled date in America/Detroit. Previous Orders is available from the hamburger menu, the member pickup screen, and Bear’s dashboard. Partially completed runs keep unfinished orders visible. History preserves conversations and does not show payment or delivery controls. This is a read-only display filter, not deletion or a database migration. Future-dated test deliveries remain current until their scheduled date passes.
+Delivered orders move out of the current member and Bear lists the day after their scheduled date in America/Detroit. Previous Orders is available from the hamburger menu, the member pickup screen, and Bear’s dashboard. Partially completed runs keep unfinished orders visible. History preserves conversations and does not show payment or delivery controls. Orders members explicitly confirm received move to history immediately; other delivered orders remain current until their scheduled date passes.
 
 ## Background notifications for Bear
 
 Push alerts for new orders, member replies, and refund requests are implemented but require [the push activation steps](supabase/PUSH-NOTIFICATIONS.md): a new SQL migration, one Supabase Edge Function, administrator initialization, a scheduler, and Bear's explicit device permission. No Resend/domain or manual VAPID-key copying is required. The dashboard still works independently. Ordinary members do not receive these push alerts. Live iPhone delivery must be tested after deployment; local tests alone do not establish readiness.
+
+## Member order management
+
+Members can correct an order number or note before the run closes and confirm receipt of their own accepted orders. Receipt confirmation marks delivery on both dashboards and moves the order straight to Previous Orders. Each change adds a conversation message for Bear. Activate with [order-management.sql](supabase/order-management.sql); see [setup and behavior](supabase/ORDER-MANAGEMENT.md). Existing payments, bookings, and conversations are preserved.

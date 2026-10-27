@@ -14,7 +14,7 @@ window.BearDashDelivery = (() => {
   const refundsScreen=document.createElement('section');refundsScreen.id='refunds';refundsScreen.className='view';refundsScreen.hidden=true;
   refundsScreen.innerHTML='<div class="section-title"><h2>Refund Requests</h2><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">Check the original payment and recipient in Venmo before returning $5. Opening Venmo does not mark a refund sent.</p><div id="refund-list"></div>';
   const previousScreen=document.createElement('section');previousScreen.id='previous';previousScreen.className='view';previousScreen.hidden=true;
-  previousScreen.innerHTML='<div class="section-title"><div><p class="eyebrow">YOUR DELIVERY HISTORY</p><h2>Previous Orders</h2></div><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">Delivered orders move here the day after their scheduled pickup date, using Michigan time. Conversations stay available. Orders that still need action remain in your current list.</p><div id="previous-list"></div>';
+  previousScreen.innerHTML='<div class="section-title"><div><p class="eyebrow">YOUR DELIVERY HISTORY</p><h2>Previous Orders</h2></div><button type="button" data-delivery-action="refresh">Refresh</button></div><p class="muted">Orders you mark received move here immediately. Other delivered orders move here the day after their scheduled pickup date, using Michigan time. Conversations stay available. Orders that still need action remain in your current list.</p><div id="previous-list"></div>';
   main.append(mailScreen,scheduleScreen,refundsScreen,previousScreen);
   const previousLink=document.createElement('button');previousLink.type='button';previousLink.dataset.view='previous';previousLink.textContent='Previous Orders';document.querySelector('#member .section-title').append(previousLink);
   const shortcuts={};
@@ -39,7 +39,8 @@ window.BearDashDelivery = (() => {
     const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Detroit',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
     const p=type=>parts.find(part=>part.type===type).value;return `${p('year')}-${p('month')}-${p('day')}`;
   };
-  function isPrevious(order){return order.status==='delivered' && order.date<today();}
+  function isPrevious(order){return order.status==='delivered' && (Boolean(order.member_received_at) || order.date<today());}
+  function canEdit(order){return ['pending','accepted'].includes(order.status) && runFor(order.date)?.status==='open' && state.bookings.some(b=>b.id===order.booking_id && b.state==='active');}
   function currentBooking(booking){const orders=ordersFor(booking.id);return !orders.length || orders.some(order=>!isPrevious(order)) || ['needs_choice','refund_requested'].includes(booking.state);}
   function nextRuns(){return state.runs.filter(run=>run.day>=today()).sort((a,b)=>a.day.localeCompare(b.day));}
   function openDays(){return nextRuns().filter(run=>run.status==='open');}
@@ -51,6 +52,7 @@ window.BearDashDelivery = (() => {
   function reset(){
     generation++;ready=false;state={runs:[],bookings:[],mail:[]};choiceBooking=null;pendingAction=null;busy=false;fetching=false;
     if(actionDialog.open)actionDialog.close();if(choiceDialog.open)choiceDialog.close();
+    const editor=document.querySelector('#edit-order-dialog');if(editor){editor.close();editor.querySelector('form').reset();editingOrder=null;}
     document.querySelector('#booking-choice-form').reset();document.querySelector('#cancel-reason').value='';
     document.querySelector('#mail-compose').reset();document.querySelector('#mail-compose-status').textContent='';
     document.querySelector('#delivery-action-confirm').disabled=false;document.querySelector('#delivery-action-cancel').disabled=false;
@@ -222,7 +224,28 @@ window.BearDashDelivery = (() => {
     try{await mutation(()=>rpc('beardash_order_status',{order_id:requestId,next_status:next}));toast('Order updated.');}
     catch(error){toast(error.message);}
   }
+  const editDialog=document.createElement('dialog');editDialog.id='edit-order-dialog';
+  editDialog.innerHTML='<form id="edit-order-form"><h2>Edit order</h2><label>Order number<input name="order" required maxlength="80"></label><label>Note to Bear<textarea name="notes" maxlength="500" rows="4"></textarea></label><p class="muted">Bear will see the correction in your conversation. If you already sent the store authorization email, send a corrected email after saving.</p><p id="edit-order-error" role="status"></p><div class="actions"><button type="submit">Save changes</button><button type="button" id="close-edit-order">Cancel</button></div></form>';
+  document.body.append(editDialog);let editingOrder=null;
+  document.querySelector('#close-edit-order').onclick=()=>{if(!busy)editDialog.close();};
+  editDialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+  document.querySelector('#edit-order-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(!editingOrder || busy)return;
+    const form=event.currentTarget,button=form.querySelector('[type=submit]'),original=editingOrder;
+    button.disabled=true;
+    try{await mutation(()=>rpc('beardash_edit_order',{order_id:original.id,expected_order:original.order,expected_notes:original.notes,order_number:form.elements.order.value.trim(),order_notes:form.elements.notes.value.trim()}));editDialog.close();toast('Order updated. Bear can see the correction in your conversation.');}
+    catch(error){document.querySelector('#edit-order-error').textContent=error.message;}
+    finally{button.disabled=false;}
+  });
+  function memberOrderAction(id,action){
+    const order=requests.find(r=>r.id===id && r.user_id===user?.id);if(!order || role==='bear')return;
+    if(action==='receive-order'){
+      openConfirmation('Confirm you received this order','Only confirm if you have your cards. This marks the order delivered for you and Bear and moves it to Previous Orders.',()=>rpc('beardash_receive_order',{order_id:id}));return;
+    }
+    if(!['pending','accepted'].includes(order.status) || runFor(order.date)?.status!=='open'){toast('Pickups for this run are closed. Send Bear a message to correct the order.');return;}
+    editingOrder={...order};const form=document.querySelector('#edit-order-form');form.elements.order.value=order.order;form.elements.notes.value=order.notes || '';document.querySelector('#edit-order-error').textContent='';editDialog.showModal();
+  }
   render();
   if(role && !loading)refresh().then(()=>window.render && window.render());
-  return {get ready(){return ready;},refresh,reset,render,submit,orderAction};
+  return {get ready(){return ready;},refresh,reset,render,submit,orderAction,memberOrderAction,isPrevious,canEdit};
 })();

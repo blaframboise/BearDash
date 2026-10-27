@@ -212,6 +212,10 @@ function card(request, bear = false) {
     actions = !window.BearDashDelivery && settings.venmo && /^[A-Za-z0-9_-]+$/.test(settings.venmo) ? `<a href="${escapeHTML(venmoLink(request))}">Open Venmo app · $5 ↗</a>` : (window.BearDashDelivery ? '' : '<button data-action="setup">Set Bear’s Venmo</button>');
     actions += settings.email && settings.bearName ? `<a href="${escapeHTML(emailLink(request))}">Compose store email ↗</a>` : '<button data-action="setup">Set pickup email & name</button>';
   }
+  if (!bear && window.BearDashDelivery) {
+    if (window.BearDashDelivery.canEdit(request)) actions += `<button type="button" data-action="edit-order" data-id="${escapeHTML(request.id)}">Edit order</button>`;
+    if (['accepted','picked_up','delivered'].includes(request.status) && !request.member_received_at && !window.BearDashDelivery.isPrevious(request)) actions += `<button type="button" data-action="receive-order" data-id="${escapeHTML(request.id)}">I received this order ✓</button>`;
+  }
   actions += `<button type="button" data-action="conversation" data-id="${escapeHTML(request.id)}">Conversation ↗</button>`;
   return `<article class="card"><div class="card-top"><h3>${escapeHTML(request.order)}</h3><span class="status ${escapeHTML(request.status)}">${statusNames[request.status] || 'Unknown'}</span></div><p>${escapeHTML(request.name)} · ${escapeHTML(dateLabel(request.date))}\n${escapeHTML(request.notes)}</p>${request.status === 'accepted' && !bear && !window.BearDashDelivery ? '<p>Open Venmo app requires Venmo installed. If it does not open, find @' + escapeHTML(settings.venmo) + ' in Venmo and enter $5 manually. Confirm the recipient before paying. Review and send the authorization from your own email account. These links do not confirm payment or email delivery.</p>' : ''}<div class="actions">${actions}</div></article>`;
 }
@@ -359,6 +363,7 @@ $('#settings-form').addEventListener('submit', async event => {
 document.addEventListener('click', async event => {
  const button = event.target.closest('button'); if(!button) return;
  if(button.dataset.view) { if(accountMenu.open && accountMenu.contains(button)) accountMenu.close(); showView(button.dataset.view); }
+ if(['edit-order','receive-order'].includes(button.dataset.action)) {window.BearDashDelivery?.memberOrderAction(button.dataset.id,button.dataset.action);return;}
  if(button.dataset.action==='conversation') openConversation(button.dataset.id);
  if(button.dataset.action==='setup') {
   if(role === 'bear') { accountMenu.showModal();menuButton.setAttribute('aria-expanded','true');$('.settings').open=true;$('.settings').scrollIntoView({behavior:'smooth'}); }
